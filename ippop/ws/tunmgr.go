@@ -327,23 +327,51 @@ func (tm *TunnelManager) getTunnelByUser(user *model.User) (*Tunnel, error) {
 	return tun, nil
 }
 
-func (tm *TunnelManager) randomTunnel() (*Tunnel, error) {
-	var result any
-	count := 0
-
+func (tm *TunnelManager) selectBestTunnel() (*Tunnel, error) {
+	var candidates []*Tunnel
 	tm.tunnels.Range(func(_, value any) bool {
-		count++
-		if rand.Intn(count) == 0 {
-			result = value
-		}
+		candidates = append(candidates, value.(*Tunnel))
 		return true
 	})
 
-	if count == 0 {
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no tunnel exist")
 	}
 
-	return result.(*Tunnel), nil
+	// Filter and find the best based on latency
+	var bestTun *Tunnel
+	minLatency := uint64(2000) // Initial threshold 2s
+
+	// First pass: find nodes with reported latency
+	for _, t := range candidates {
+		if len(t.netDelays) > 0 {
+			avg := uint64(0)
+			for _, d := range t.netDelays {
+				avg += d
+			}
+			avg /= uint64(len(t.netDelays))
+
+			if avg < minLatency {
+				minLatency = avg
+				bestTun = t
+			}
+		}
+	}
+
+	if bestTun != nil {
+		// To avoid overwhelming one best node, 20% of the time we still pick another good candidate
+		if rand.Intn(100) < 20 && len(candidates) > 1 {
+			return candidates[rand.Intn(len(candidates))], nil
+		}
+		return bestTun, nil
+	}
+
+	// Default to random
+	return candidates[rand.Intn(len(candidates))], nil
+}
+
+func (tm *TunnelManager) randomTunnel() (*Tunnel, error) {
+	return tm.selectBestTunnel()
 }
 func (tm *TunnelManager) handleUserSessionWhenSocks5TCPClose(session *UserSession) {
 	tm.userSessionLock.Lock()
@@ -392,7 +420,7 @@ func (tm *TunnelManager) HandleSocks5TCP(tcpConn *net.TCPConn, targetInfo *socks
 		}
 	}()
 
-	return tun.acceptSocks5TCPConn(tcpConn, targetInfo)
+	return tun.acceptSocks5TCPConnImproved(tcpConn, targetInfo)
 }
 
 func (tm *TunnelManager) HandleSocks5UDP(udpConn socks5.UDPConn, udpInfo *socks5.Socks5UDPInfo, data []byte) error {
