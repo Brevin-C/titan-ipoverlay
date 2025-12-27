@@ -459,8 +459,8 @@ func (tm *TunnelManager) selectBestTunnel() (*Tunnel, error) {
 		return nil, fmt.Errorf("no tunnel available")
 	}
 
-	// SAFETY: Always keep at least 10% of nodes available (prevent total blacklist)
-	minHealthy := len(allCandidates) / 10
+	// SAFETY: Always keep at least 50% of nodes available (prevent mass blacklist)
+	minHealthy := len(allCandidates) / 2
 	if minHealthy < 1 {
 		minHealthy = 1
 	}
