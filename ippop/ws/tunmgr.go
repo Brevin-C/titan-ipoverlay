@@ -61,6 +61,10 @@ type TunnelManager struct {
 	userSessionLock sync.Mutex
 
 	socks5ConnCount atomic.Int64
+
+	// Simple blacklist for failed nodes
+	failedNodes     map[string]time.Time // nodeID -> blacklist expire time
+	failedNodesLock sync.Mutex
 }
 
 func NewTunnelManager(config config.Config, redis *redis.Redis) *TunnelManager {
@@ -76,6 +80,8 @@ func NewTunnelManager(config config.Config, redis *redis.Redis) *TunnelManager {
 		filterRules:     &Rules{rules: RulesToMap(config.FilterRules.Rules), defaultAction: config.FilterRules.DefaultAction},
 		userSessionMap:  make(map[string]map[string]*UserSession),
 		userSessionLock: sync.Mutex{},
+		failedNodes:     make(map[string]time.Time),
+		failedNodesLock: sync.Mutex{},
 	}
 
 	routeScheduler := newUserRouteScheduler(tm)
@@ -85,6 +91,7 @@ func NewTunnelManager(config config.Config, redis *redis.Redis) *TunnelManager {
 	go tm.startUserTrafficTimer()
 	go tm.RecyclUserSession()
 	go routeScheduler.start()
+	go tm.cleanupFailedNodes() // Cleanup blacklist every 30s
 	return tm
 }
 
@@ -327,47 +334,76 @@ func (tm *TunnelManager) getTunnelByUser(user *model.User) (*Tunnel, error) {
 	return tun, nil
 }
 
+// Add node to blacklist for 5 minutes
+func (tm *TunnelManager) markNodeAsFailed(nodeID string) {
+	tm.failedNodesLock.Lock()
+	defer tm.failedNodesLock.Unlock()
+
+	// Blacklist for 5 minutes
+	tm.failedNodes[nodeID] = time.Now().Add(5 * time.Minute)
+	logx.Infof("[NodeBlacklist] Node %s marked as failed, will retry after 5 minutes", nodeID)
+}
+
+// Check if node is in blacklist
+func (tm *TunnelManager) isNodeBlacklisted(nodeID string) bool {
+	tm.failedNodesLock.Lock()
+	defer tm.failedNodesLock.Unlock()
+
+	expireTime, exists := tm.failedNodes[nodeID]
+	if !exists {
+		return false
+	}
+
+	// Check if still blacklisted
+	if time.Now().Before(expireTime) {
+		return true
+	}
+
+	// Expired, remove from blacklist
+	delete(tm.failedNodes, nodeID)
+	return false
+}
+
+// Cleanup expired entries from blacklist every 30s
+func (tm *TunnelManager) cleanupFailedNodes() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		tm.failedNodesLock.Lock()
+		now := time.Now()
+		for nodeID, expireTime := range tm.failedNodes {
+			if now.After(expireTime) {
+				delete(tm.failedNodes, nodeID)
+				logx.Infof("[NodeBlacklist] Node %s removed from blacklist (expired)", nodeID)
+			}
+		}
+		tm.failedNodesLock.Unlock()
+	}
+}
+
+// Simple random selection from healthy nodes (excluding blacklisted)
 func (tm *TunnelManager) selectBestTunnel() (*Tunnel, error) {
-	var candidates []*Tunnel
-	tm.tunnels.Range(func(_, value any) bool {
-		candidates = append(candidates, value.(*Tunnel))
+	var healthyCandidates []*Tunnel
+
+	tm.tunnels.Range(func(key, value any) bool {
+		nodeID := key.(string)
+
+		// Skip blacklisted nodes
+		if tm.isNodeBlacklisted(nodeID) {
+			return true
+		}
+
+		healthyCandidates = append(healthyCandidates, value.(*Tunnel))
 		return true
 	})
 
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no tunnel exist")
+	if len(healthyCandidates) == 0 {
+		return nil, fmt.Errorf("no healthy tunnel available")
 	}
 
-	// Filter and find the best based on latency
-	var bestTun *Tunnel
-	minLatency := uint64(2000) // Initial threshold 2s
-
-	// First pass: find nodes with reported latency
-	for _, t := range candidates {
-		if len(t.netDelays) > 0 {
-			avg := uint64(0)
-			for _, d := range t.netDelays {
-				avg += d
-			}
-			avg /= uint64(len(t.netDelays))
-
-			if avg < minLatency {
-				minLatency = avg
-				bestTun = t
-			}
-		}
-	}
-
-	if bestTun != nil {
-		// To avoid overwhelming one best node, 20% of the time we still pick another good candidate
-		if rand.Intn(100) < 20 && len(candidates) > 1 {
-			return candidates[rand.Intn(len(candidates))], nil
-		}
-		return bestTun, nil
-	}
-
-	// Default to random
-	return candidates[rand.Intn(len(candidates))], nil
+	// Random selection from healthy nodes
+	return healthyCandidates[rand.Intn(len(healthyCandidates))], nil
 }
 
 func (tm *TunnelManager) randomTunnel() (*Tunnel, error) {

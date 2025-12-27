@@ -304,6 +304,10 @@ func (t *Tunnel) acceptSocks5TCPConnImproved(conn net.Conn, targetInfo *socks5.S
 		err := t.onClientCreateByDomain(&pb.DestAddr{Addr: addr}, sessionID)
 		if err != nil {
 			logx.Errorf("Async tunnel session creation failed: %v", err)
+
+			// Mark node as failed for retry prevention
+			t.tunMgr.markNodeAsFailed(t.opts.Id)
+
 			conn.Close()
 		}
 	}()

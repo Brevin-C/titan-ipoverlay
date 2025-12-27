@@ -226,7 +226,7 @@ func (t *Tunnel) Serve() error {
 	for {
 		messageType, p, err := conn.ReadMessage()
 		if err != nil {
-			logx.Errorf("[DIAG] Tunnel connection lost: %v. This is likely due to unstable node (network or ISP restriction).", err)
+			logx.Errorf("[DIAG] Tunnel connection lost: %v. This is likely due to NODE_UNSTABLE (network or ISP restriction).", err)
 			break
 		}
 
