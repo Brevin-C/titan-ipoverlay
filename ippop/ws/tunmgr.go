@@ -62,16 +62,24 @@ type TunnelManager struct {
 
 	socks5ConnCount atomic.Int64
 
-	// Health tracking for IoT home nodes (more flexible than simple blacklist)
-	nodeHealth     map[string]*NodeHealth // nodeID -> health status
-	nodeHealthLock sync.Mutex
+	// Failure rate statistics for nodes (better than simple blacklist)
+	nodeStats     map[string]*NodeStats
+	nodeStatsLock sync.Mutex
 }
 
-type NodeHealth struct {
-	FailCount       int       // Consecutive failure count
-	LastFailTime    time.Time // Last failure timestamp
-	LastSuccessTime time.Time // Last success timestamp
-	BlacklistUntil  time.Time // Blacklist expiry time
+const (
+	RequestHistorySize     = 100             // Sample size for failure rate calculation
+	FailureRateThreshold   = 0.30            // 30% failure rate triggers blacklist
+	StatsBlacklistDuration = 5 * time.Minute // Blacklist duration for bad nodes
+)
+
+// NodeStats tracks request success/failure rate
+type NodeStats struct {
+	RequestHistory []bool    // true=success, false=failure (ring buffer, last 100 requests)
+	HistoryIndex   int       // Current position in ring buffer
+	TotalRequests  int       // Total requests processed by this node
+	BlacklistUntil time.Time // Blacklist expiry time (if failure rate too high)
+	LastUpdated    time.Time
 }
 
 func NewTunnelManager(config config.Config, redis *redis.Redis) *TunnelManager {
@@ -87,8 +95,8 @@ func NewTunnelManager(config config.Config, redis *redis.Redis) *TunnelManager {
 		filterRules:     &Rules{rules: RulesToMap(config.FilterRules.Rules), defaultAction: config.FilterRules.DefaultAction},
 		userSessionMap:  make(map[string]map[string]*UserSession),
 		userSessionLock: sync.Mutex{},
-		nodeHealth:      make(map[string]*NodeHealth),
-		nodeHealthLock:  sync.Mutex{},
+		nodeStats:       make(map[string]*NodeStats),
+		nodeStatsLock:   sync.Mutex{},
 	}
 
 	routeScheduler := newUserRouteScheduler(tm)
@@ -98,7 +106,7 @@ func NewTunnelManager(config config.Config, redis *redis.Redis) *TunnelManager {
 	go tm.startUserTrafficTimer()
 	go tm.RecyclUserSession()
 	go routeScheduler.start()
-	go tm.cleanupNodeHealth() // Cleanup every 30s
+	go tm.cleanupNodeStats() // Cleanup every 30s
 	return tm
 }
 
@@ -341,104 +349,102 @@ func (tm *TunnelManager) getTunnelByUser(user *model.User) (*Tunnel, error) {
 	return tun, nil
 }
 
-// Calculate progressive blacklist duration based on failure count
-// Progressive penalty: more failures = longer blacklist
-func calculateBlacklistDuration(failCount int) time.Duration {
-	switch failCount {
-	case 1:
-		return 30 * time.Second // 1st failure: wait 30s
-	case 2:
-		return 1 * time.Minute // 2nd: 1min
-	case 3:
-		return 2 * time.Minute // 3rd: 2min
-	case 4:
-		return 5 * time.Minute // 4th: 5min
-	default:
-		return 15 * time.Minute // 5+: 15min (max)
+// Record node request result (success or failure)
+func (tm *TunnelManager) recordNodeRequest(nodeID string, success bool) {
+	tm.nodeStatsLock.Lock()
+	defer tm.nodeStatsLock.Unlock()
+
+	stats, exists := tm.nodeStats[nodeID]
+	if !exists {
+		stats = &NodeStats{
+			RequestHistory: make([]bool, RequestHistorySize),
+			HistoryIndex:   0,
+			TotalRequests:  0,
+		}
+		tm.nodeStats[nodeID] = stats
+	}
+
+	// Add result to ring buffer
+	stats.RequestHistory[stats.HistoryIndex] = success
+	stats.HistoryIndex = (stats.HistoryIndex + 1) % RequestHistorySize
+	stats.TotalRequests++
+	stats.LastUpdated = time.Now()
+
+	// Only evaluate blacklist after we have enough samples
+	if stats.TotalRequests < RequestHistorySize {
+		return // Not enough data yet
+	}
+
+	// Calculate failure rate over last 100 requests
+	failureCount := 0
+	for _, result := range stats.RequestHistory {
+		if !result { // false = failure
+			failureCount++
+		}
+	}
+
+	failureRate := float64(failureCount) / float64(RequestHistorySize)
+
+	// Check if failure rate exceeds threshold
+	if failureRate > FailureRateThreshold {
+		// Blacklist this node
+		stats.BlacklistUntil = time.Now().Add(StatsBlacklistDuration)
+		logx.Warnf("[NodeStats] Node %s blacklisted: failure rate %.1f%% (%d/%d failed)",
+			nodeID, failureRate*100, failureCount, RequestHistorySize)
+	} else if !stats.BlacklistUntil.IsZero() && time.Now().After(stats.BlacklistUntil) {
+		// Node recovered (was blacklisted but now OK)
+		stats.BlacklistUntil = time.Time{}
+		logx.Infof("[NodeStats] Node %s recovered: failure rate now %.1f%%", nodeID, failureRate*100)
 	}
 }
 
-// Record node failure with progressive penalty
+// Convenience wrapper for marking node as failed
 func (tm *TunnelManager) markNodeAsFailed(nodeID string) {
-	tm.nodeHealthLock.Lock()
-	defer tm.nodeHealthLock.Unlock()
-
-	health, exists := tm.nodeHealth[nodeID]
-	if !exists {
-		health = &NodeHealth{}
-		tm.nodeHealth[nodeID] = health
-	}
-
-	// Increment consecutive failure count
-	health.FailCount++
-	health.LastFailTime = time.Now()
-
-	// Calculate progressive blacklist duration
-	duration := calculateBlacklistDuration(health.FailCount)
-	health.BlacklistUntil = time.Now().Add(duration)
-
-	logx.Infof("[NodeHealth] Node %s failed (count: %d), blacklisted for %v",
-		nodeID, health.FailCount, duration)
+	tm.recordNodeRequest(nodeID, false)
 }
 
-// Record node success - immediately clears failure count
+// Convenience wrapper for marking node as healthy
 func (tm *TunnelManager) markNodeAsHealthy(nodeID string) {
-	tm.nodeHealthLock.Lock()
-	defer tm.nodeHealthLock.Unlock()
-
-	health, exists := tm.nodeHealth[nodeID]
-	if !exists {
-		return
-	}
-
-	// Clear failure count on success
-	if health.FailCount > 0 {
-		logx.Infof("[NodeHealth] Node %s recovered (was fail count: %d)", nodeID, health.FailCount)
-		health.FailCount = 0
-		health.BlacklistUntil = time.Time{} // Clear blacklist
-	}
-	health.LastSuccessTime = time.Now()
+	tm.recordNodeRequest(nodeID, true)
 }
 
 // Check if node is currently blacklisted
 func (tm *TunnelManager) isNodeBlacklisted(nodeID string) bool {
-	tm.nodeHealthLock.Lock()
-	defer tm.nodeHealthLock.Unlock()
+	tm.nodeStatsLock.Lock()
+	defer tm.nodeStatsLock.Unlock()
 
-	health, exists := tm.nodeHealth[nodeID]
+	stats, exists := tm.nodeStats[nodeID]
 	if !exists {
 		return false
 	}
 
 	// Check if blacklist expired
-	if health.BlacklistUntil.IsZero() || time.Now().After(health.BlacklistUntil) {
+	if stats.BlacklistUntil.IsZero() || time.Now().After(stats.BlacklistUntil) {
 		return false
 	}
 
 	return true
 }
 
-// Cleanup old health records every 30s
-func (tm *TunnelManager) cleanupNodeHealth() {
+// Cleanup old stats records every 30s
+func (tm *TunnelManager) cleanupNodeStats() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		tm.nodeHealthLock.Lock()
+		tm.nodeStatsLock.Lock()
 		now := time.Now()
-		for nodeID, health := range tm.nodeHealth {
-			// Remove records older than 1 hour with no recent activity
-			if health.FailCount == 0 &&
-				now.Sub(health.LastSuccessTime) > time.Hour &&
-				now.Sub(health.LastFailTime) > time.Hour {
-				delete(tm.nodeHealth, nodeID)
+		for nodeID, stats := range tm.nodeStats {
+			// Remove stats older than 1 hour with no activity
+			if now.Sub(stats.LastUpdated) > time.Hour {
+				delete(tm.nodeStats, nodeID)
 			}
 		}
-		tm.nodeHealthLock.Unlock()
+		tm.nodeStatsLock.Unlock()
 	}
 }
 
-// Smart node selection: random from healthy + always keep 10% reserve
+// Smart node selection: random from healthy + always keep 50% reserve
 func (tm *TunnelManager) selectBestTunnel() (*Tunnel, error) {
 	var allCandidates []*Tunnel
 	var healthyCandidates []*Tunnel
@@ -467,7 +473,7 @@ func (tm *TunnelManager) selectBestTunnel() (*Tunnel, error) {
 
 	if len(healthyCandidates) < minHealthy {
 		// Emergency: use all nodes when too many are blacklisted
-		logx.Warnf("[NodeHealth] Only %d/%d healthy nodes, using all nodes",
+		logx.Warnf("[NodeStats] Only %d/%d healthy nodes, using all nodes",
 			len(healthyCandidates), len(allCandidates))
 		healthyCandidates = allCandidates
 	}
