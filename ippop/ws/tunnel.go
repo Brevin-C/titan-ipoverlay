@@ -351,6 +351,9 @@ func (t *Tunnel) onClientCreateByDomain(dest *pb.DestAddr, sessionID string) err
 		return fmt.Errorf(reply.ErrMsg)
 	}
 
+	// Mark node as healthy on successful session creation
+	t.tunMgr.markNodeAsHealthy(t.opts.Id)
+
 	return nil
 
 }
