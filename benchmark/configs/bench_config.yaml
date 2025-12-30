@@ -71,15 +71,15 @@ proxies:
 # 测试场景配置
 scenarios:
   # 单次请求测试
-  - name: "单次请求测试_1000次"
+  - name: "单次请求采样测试"
     type: "single"
-    count: 1000
+    count: 200 # 减少默认采样次数，提高速度
     enabled: true
 
-  - name: "单次请求测试_10000次"
+  - name: "大规模顺序采样(1000次)"
     type: "single"
-    count: 10000
-    enabled: false # 默认禁用大规模测试
+    count: 1000
+    enabled: false
 
   # 并发测试
   - name: "10并发测试"
@@ -128,7 +128,7 @@ settings:
   max_retries: 0
 
   # 请求间隔（单次测试时，避免过快请求）
-  request_interval: 100ms
+  request_interval: 10ms
 
   # 输出目录
   output_dir: "reports"
