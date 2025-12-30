@@ -1,0 +1,5 @@
+Proxy Name,Target URL,Total Requests,Success Count,Failed Count,Success Rate %,Avg DNS (ms),Avg TCP (ms),Avg SOCKS5 (ms),Avg TLS (ms),Avg TTFB (ms),Avg Total (ms)
+泰坦代理,https://www.youtube.com/watch?v=dQw4w9WgXcQ,3,0,3,0.00,0.00,0.00,0.00,0.00,0.00,0.00
+泰坦代理,https://www.youtube.com/watch?v=dQw4w9WgXcQ,3,0,3,0.00,0.00,0.00,0.00,0.00,0.00,0.00
+泰坦代理,https://www.youtube.com/watch?v=dQw4w9WgXcQ,3,0,3,0.00,0.00,0.00,0.00,0.00,0.00,0.00
+泰坦代理,https://www.youtube.com/watch?v=dQw4w9WgXcQ,3,0,3,0.00,0.00,0.00,0.00,0.00,0.00,0.00

@@ -1,0 +1,192 @@
+{
+  "report_info": {
+    "generated_at": "2025-12-30T18:56:20+08:00",
+    "total_proxies": 4
+  },
+  "results": [
+    {
+      "TestName": "单次请求测试_1000次",
+      "ProxyName": "泰坦代理",
+      "TargetURL": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "TotalCount": 3,
+      "SuccessCount": 0,
+      "FailedCount": 3,
+      "Metrics": [
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 771542,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        },
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 276917,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        },
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 349500,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        }
+      ],
+      "StartTime": "2025-12-30T18:56:16.171227+08:00",
+      "EndTime": "2025-12-30T18:56:16.374465+08:00",
+      "Duration": 203238125
+    },
+    {
+      "TestName": "10并发测试",
+      "ProxyName": "泰坦代理",
+      "TargetURL": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "TotalCount": 3,
+      "SuccessCount": 0,
+      "FailedCount": 3,
+      "Metrics": [
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 796791,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        },
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 807750,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        },
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 798500,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        }
+      ],
+      "StartTime": "2025-12-30T18:56:17.374946+08:00",
+      "EndTime": "2025-12-30T18:56:17.37618+08:00",
+      "Duration": 1233958
+    },
+    {
+      "TestName": "50并发测试",
+      "ProxyName": "泰坦代理",
+      "TargetURL": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "TotalCount": 3,
+      "SuccessCount": 0,
+      "FailedCount": 3,
+      "Metrics": [
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 689792,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        },
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 683750,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        },
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 750917,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        }
+      ],
+      "StartTime": "2025-12-30T18:56:18.377275+08:00",
+      "EndTime": "2025-12-30T18:56:18.378269+08:00",
+      "Duration": 993667
+    },
+    {
+      "TestName": "100并发测试",
+      "ProxyName": "泰坦代理",
+      "TargetURL": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "TotalCount": 3,
+      "SuccessCount": 0,
+      "FailedCount": 3,
+      "Metrics": [
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 446041,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        },
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 460833,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        },
+        {
+          "DNSLookup": 0,
+          "TCPConnect": 0,
+          "SOCKS5Handshake": 0,
+          "TLSHandshake": 0,
+          "TTFB": 0,
+          "TotalTime": 461209,
+          "Success": false,
+          "Error": "request failed: Get \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\": socks connect tcp 127.0.0.1:1080-\u003ewww.youtube.com:443: dial tcp 127.0.0.1:1080: connect: connection refused",
+          "StatusCode": 0
+        }
+      ],
+      "StartTime": "2025-12-30T18:56:19.379357+08:00",
+      "EndTime": "2025-12-30T18:56:19.379999+08:00",
+      "Duration": 642917
+    }
+  ]
+}

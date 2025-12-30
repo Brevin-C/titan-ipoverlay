@@ -1,0 +1,137 @@
+# IP代理性能测试配置文件
+
+# 测试目标配置
+targets:
+  - name: "YouTube视频页面"
+    url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    method: "GET"
+    timeout: 30s
+
+  - name: "Twitter用户主页"
+    url: "https://twitter.com/elonmusk"
+    method: "GET"
+    timeout: 30s
+
+  - name: "Google首页"
+    url: "https://www.google.com"
+    method: "GET"
+    timeout: 30s
+
+  # IP直连测试 - SOCKS5代理常用场景
+  - name: "YouTube IP直连测试"
+    url: "http://142.250.185.46"
+    method: "GET"
+    timeout: 30s
+
+  - name: "Google DNS IP测试"
+    url: "http://8.8.8.8"
+    method: "GET"
+    timeout: 30s
+
+  - name: "Cloudflare IP测试"
+    url: "http://1.1.1.1"
+    method: "GET"
+    timeout: 30s
+
+# 代理配置
+# 💡 批量测试: 配置多个代理，使用 --test-all-proxies 可一次测试所有代理
+proxies:
+  titan:
+    socks5: "127.0.0.1:1080"
+    name: "泰坦代理"
+    username: ""
+    password: ""
+
+  # 示例：添加更多代理节点用于批量测试
+  # node-1:
+  #   socks5: "proxy1.example.com:1080"
+  #   name: "节点1-美国"
+  #   username: ""
+  #   password: ""
+  #
+  # node-2:
+  #   socks5: "proxy2.example.com:1080"
+  #   name: "节点2-日本"
+  #   username: ""
+  #   password: ""
+  #
+  # node-3:
+  #   socks5: "proxy3.example.com:1080"
+  #   name: "节点3-新加坡"
+  #   username: "user"
+  #   password: "pass"
+
+  # 如果有竞争对手代理，取消注释并配置
+  # competitor:
+  #   socks5: "competitor-proxy.com:1080"
+  #   name: "竞争对手"
+  #   username: "user"
+  #   password: "pass"
+
+# 测试场景配置
+scenarios:
+  # 单次请求测试
+  - name: "单次请求测试_1000次"
+    type: "single"
+    count: 1000
+    enabled: true
+
+  - name: "单次请求测试_10000次"
+    type: "single"
+    count: 10000
+    enabled: false # 默认禁用大规模测试
+
+  # 并发测试
+  - name: "10并发测试"
+    type: "concurrent"
+    concurrency: 10
+    count: 100 # 每个并发组执行100次
+    enabled: true
+
+  - name: "50并发测试"
+    type: "concurrent"
+    concurrency: 50
+    count: 100
+    enabled: true
+
+  - name: "100并发测试"
+    type: "concurrent"
+    concurrency: 100
+    count: 100
+    enabled: true
+
+  # 高并发压力测试场景
+  - name: "1000次并发压测"
+    type: "concurrent"
+    concurrency: 100
+    count: 1000
+    enabled: false # 默认禁用，通过CLI启用
+
+  - name: "5000次并发压测"
+    type: "concurrent"
+    concurrency: 200
+    count: 5000
+    enabled: false # 默认禁用，通过CLI启用
+
+  - name: "10000次极限压测"
+    type: "concurrent"
+    concurrency: 500
+    count: 10000
+    enabled: false # 默认禁用，通过CLI启用
+
+# 通用配置
+settings:
+  # 请求超时时间
+  request_timeout: 30s
+
+  # 失败重试次数
+  max_retries: 0
+
+  # 请求间隔（单次测试时，避免过快请求）
+  request_interval: 100ms
+
+  # 输出目录
+  output_dir: "reports"
+
+  # 是否显示详细日志
+  verbose: false
