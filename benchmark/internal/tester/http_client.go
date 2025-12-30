@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
-	"net/url"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -25,12 +24,6 @@ type HTTPClient struct {
 
 // NewHTTPClient creates a new HTTP client with SOCKS5 proxy support
 func NewHTTPClient(proxyAddr, proxyName, username, password string, timeout time.Duration) (*HTTPClient, error) {
-	// Parse proxy address
-	proxyURL, err := url.Parse(fmt.Sprintf("socks5://%s", proxyAddr))
-	if err != nil {
-		return nil, fmt.Errorf("invalid proxy address: %w", err)
-	}
-
 	// SOCKS5 auth
 	var auth *proxy.Auth
 	if username != "" || password != "" {
@@ -50,37 +43,34 @@ func NewHTTPClient(proxyAddr, proxyName, username, password string, timeout time
 	dialFunc := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		timings, _ := ctx.Value(timingKey{}).(*dialTiming)
 
-		// 1. TCP Connect to Proxy
+		// Create a forward dialer that SOCKS5 will use to connect to the proxy.
+		// We wrap it to capture the TCP connection time to the proxy server itself.
+		forward := &forwardDialer{
+			dialContext: baseDialer.DialContext,
+			ctx:         ctx,
+			timings:     timings,
+		}
+
+		// Create SOCKS5 dialer using our forwarder to connect to proxyAddr
+		// Note: we use "tcp" for the proxy connection
+		s5, err := proxy.SOCKS5("tcp", proxyAddr, auth, forward)
+		if err != nil {
+			return nil, err
+		}
+
+		// Measure total dial time (TCP to proxy + SOCKS5 handshake)
 		start := time.Now()
-		tcpConn, err := baseDialer.DialContext(ctx, network, proxyURL.Host)
-		if err != nil {
-			return nil, err
-		}
-		tcpElapsed := time.Since(start)
-		if timings != nil {
-			timings.tcpConnect = tcpElapsed
-		}
-
-		// 2. SOCKS5 Handshake
-		start = time.Now()
-		dialer, err := proxy.SOCKS5(network, proxyURL.Host, auth, proxy.Direct)
-		if err != nil {
-			tcpConn.Close()
-			return nil, err
-		}
-
-		// We need to measure just the handshake.
-		// A better way is to use a custom SOCKS5 implementation, but since we are using proxy.SOCKS5:
-		conn, err := dialer.Dial(network, addr)
+		conn, err := s5.Dial(network, addr)
 		if err != nil {
 			return nil, err
 		}
 
 		if timings != nil {
-			// Total dial time minus TCP connect time is the handshake time
-			// Actually, proxy.Dialer.Dial(network, addr) does both: connects to proxy and handshakes.
-			// Since we want to distinguish:
-			timings.handshake = time.Since(start) - tcpElapsed
+			// Handshake time is total time from s5.Dial minus the TCP part recorded in the forwarder
+			timings.handshake = time.Since(start) - timings.tcpConnect
+			if timings.handshake < 0 {
+				timings.handshake = 0
+			}
 		}
 
 		return conn, nil
@@ -120,41 +110,19 @@ type dialTiming struct {
 	handshake  time.Duration
 }
 
-type timingDialer struct {
-	proxy.Dialer
-	tcpDialer *net.Dialer
-	timings   *dialTiming
-}
-
-func (d *timingDialer) Dial(network, addr string) (net.Conn, error) {
-	start := time.Now()
-	// TCP Connect
-	tcpConn, err := d.tcpDialer.Dial(network, addr)
-	if err != nil {
-		return nil, err
-	}
-	d.timings.tcpConnect = time.Since(start)
-
-	// SOCKS5 Handshake happens when we use this dialer as 'forward' or wrap it.
-	// Actually, the proxy.Dialer returned by proxy.SOCKS5 uses the forward dialer to connect to THE PROXY.
-	// So we need to measure the wrap.
-	return tcpConn, nil
-}
-
-type socksTimingDialer struct {
-	socksDialer proxy.Dialer
+type forwardDialer struct {
+	dialContext func(ctx context.Context, network, address string) (net.Conn, error)
+	ctx         context.Context
 	timings     *dialTiming
 }
 
-func (d *socksTimingDialer) Dial(network, addr string) (net.Conn, error) {
+func (f *forwardDialer) Dial(network, address string) (net.Conn, error) {
 	start := time.Now()
-	conn, err := d.socksDialer.Dial(network, addr)
-	if err != nil {
-		return nil, err
+	conn, err := f.dialContext(f.ctx, network, address)
+	if err == nil && f.timings != nil {
+		f.timings.tcpConnect = time.Since(start)
 	}
-	totalDial := time.Since(start)
-	d.timings.handshake = totalDial - d.timings.tcpConnect
-	return conn, nil
+	return conn, err
 }
 
 // MakeRequest performs an HTTP request and collects timing metrics
@@ -165,14 +133,6 @@ func (c *HTTPClient) MakeRequest(ctx context.Context, targetURL string) (*Latenc
 
 	// Use a pointer to collect dial timings
 	timings := &dialTiming{}
-
-	// Setup custom dialer for this request if it's a proxy request
-	// Note: In NewHTTPClient we set the dialer. Here we might need to override it per request
-	// but Transport.Dial is fixed.
-	// Optimization: We can't easily change Transport.Dial per request without creating a new Transport.
-	// However, we are already disabling KeepAlives, so we can afford a bit more overhead.
-	// Alternative: Use context to pass a "timing collector" to the dialer already set in Transport.
-
 	ctx = context.WithValue(ctx, timingKey{}, timings)
 
 	// Create request
@@ -215,7 +175,8 @@ func (c *HTTPClient) MakeRequest(ctx context.Context, targetURL string) (*Latenc
 		},
 	}
 
-	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	traceCtx := httptrace.WithClientTrace(req.Context(), trace)
+	req = req.WithContext(traceCtx)
 
 	// Execute request
 	resp, err := c.client.Do(req)
@@ -267,13 +228,10 @@ func NewDirectHTTPClient(timeout time.Duration) *HTTPClient {
 		timings, _ := ctx.Value(timingKey{}).(*dialTiming)
 		start := time.Now()
 		conn, err := baseDialer.DialContext(ctx, network, addr)
-		if err != nil {
-			return nil, err
-		}
-		if timings != nil {
+		if err == nil && timings != nil {
 			timings.tcpConnect = time.Since(start)
 		}
-		return conn, nil
+		return conn, err
 	}
 
 	httpClient := &http.Client{
