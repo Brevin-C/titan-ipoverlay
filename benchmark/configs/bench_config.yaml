@@ -33,14 +33,19 @@ targets:
     method: "GET"
     timeout: 30s
 
+  - name: "泰坦测试域名"
+    url: "https://guang-test.titannet.io"
+    method: "GET"
+    timeout: 30s
+
 # 代理配置
 # 💡 批量测试: 配置多个代理，使用 --test-all-proxies 可一次测试所有代理
 proxies:
   titan:
-    socks5: "127.0.0.1:1080"
+    socks5: "46.250.235.241:41003"
     name: "泰坦代理"
-    username: ""
-    password: ""
+    username: "00008_yuanrenxue0001"
+    password: "yuanrenxue0001"
 
   # 示例：添加更多代理节点用于批量测试
   # node-1:
@@ -73,7 +78,7 @@ scenarios:
   # 单次请求测试
   - name: "单次请求采样测试"
     type: "single"
-    count: 200 # 减少默认采样次数，提高速度
+    count: 50 # 减少次数以便快速验证本机环境
     enabled: true
 
   - name: "大规模顺序采样(1000次)"

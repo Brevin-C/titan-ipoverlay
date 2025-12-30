@@ -6,7 +6,7 @@ all: build-mac
 # 构建Mac可执行文件
 build-mac:
 	@echo "构建Mac可执行文件..."
-	GOOS=darwin GOARCH=amd64 go build -o bin/benchmark-mac cmd/benchmark.go
+	GOOS=darwin go build -o bin/benchmark-mac cmd/benchmark.go
 	@echo "✓ 构建完成: bin/benchmark-mac"
 
 # 构建Linux可执行文件

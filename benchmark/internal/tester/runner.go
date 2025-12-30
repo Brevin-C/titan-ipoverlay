@@ -3,6 +3,7 @@ package tester
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 )
@@ -65,10 +66,17 @@ func (st *SingleTester) RunTest(ctx context.Context, testName, targetURL string,
 
 			mu.Lock()
 			result.Metrics[index] = *metrics
-			if err == nil {
+			if err == nil && metrics.Success {
 				successCount++
 			} else {
 				failedCount++
+				if failedCount <= 5 {
+					errMsg := metrics.Error
+					if errMsg == "" && err != nil {
+						errMsg = err.Error()
+					}
+					fmt.Fprintf(os.Stderr, "  [详细错误] 请求 #%d 失败: %s\n", index+1, errMsg)
+				}
 			}
 
 			completed := successCount + failedCount

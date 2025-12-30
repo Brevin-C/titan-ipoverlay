@@ -99,7 +99,15 @@ func runBenchmark(c *cli.Context) error {
 
 	// Determine target URL
 	targetURL := c.String("target")
-	if targetURL == "" {
+	if targetURL != "" {
+		// Check if it's a target name from config
+		for _, t := range cfg.Targets {
+			if t.Name == targetURL {
+				targetURL = t.URL
+				break
+			}
+		}
+	} else {
 		if len(cfg.Targets) == 0 {
 			return fmt.Errorf("no targets defined in configuration")
 		}
