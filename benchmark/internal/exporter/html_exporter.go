@@ -19,7 +19,17 @@ func (e *Exporter) exportHTML(result *tester.TestResult, baseName string) error 
 	}
 	defer file.Close()
 
-	tmpl, err := template.New("report").Parse(singleReportTemplate)
+	funcMap := template.FuncMap{
+		"add": func(a, b int) int { return a + b },
+		"formatDuration": func(d time.Duration) string {
+			if d == 0 {
+				return "0.00"
+			}
+			return fmt.Sprintf("%.2f", float64(d.Microseconds())/1000.0)
+		},
+	}
+
+	tmpl, err := template.New("report").Funcs(funcMap).Parse(singleReportTemplate)
 	if err != nil {
 		return err
 	}
@@ -42,7 +52,14 @@ func (e *Exporter) exportBatchHTML(results []*tester.TestResult, baseName string
 	}
 	defer file.Close()
 
-	tmpl, err := template.New("batch_report").Parse(batchReportTemplate)
+	funcMap := template.FuncMap{
+		"add": func(a, b int) int { return a + b },
+		"formatDuration": func(d time.Duration) string {
+			return fmt.Sprintf("%.2f", float64(d.Microseconds())/1000.0)
+		},
+	}
+
+	tmpl, err := template.New("batch_report").Funcs(funcMap).Parse(batchReportTemplate)
 	if err != nil {
 		return err
 	}
@@ -63,12 +80,19 @@ type ProxyData struct {
 	TotalCount  int
 	SuccessRate float64
 	FailedCount int
-	AvgDNS      float64
-	AvgTCP      float64
-	AvgSOCKS5   float64
-	AvgTLS      float64
-	AvgTTFB     float64
-	AvgTotal    float64
+	// Averages
+	AvgDNS    float64
+	AvgTCP    float64
+	AvgSOCKS5 float64
+	AvgTLS    float64
+	AvgTTFB   float64
+	AvgTotal  float64
+	// Extended Stats (Total Latency)
+	MinTotal    float64
+	MaxTotal    float64
+	MedianTotal float64
+	P95Total    float64
+	P99Total    float64
 	IsBest      bool
 	IsWorst     bool
 }
@@ -82,9 +106,19 @@ type BatchReportData struct {
 
 func prepareSingleReportData(result *tester.TestResult) map[string]interface{} {
 	stats := calculateAverages(result)
+	allStats := tester.CalculateAllStats(result)
+	totalStats := allStats["total"]
+
 	successRate := 0.0
 	if result.TotalCount > 0 {
 		successRate = float64(result.SuccessCount) / float64(result.TotalCount) * 100
+	}
+
+	// Calculate 'Server Processing' time for breakdown chart: TTFB - (DNS + TCP + SOCKS5 + TLS)
+	// This makes the breakdown more logically accurate as a sum of parts.
+	processing := stats["ttfb"] - (stats["dns"] + stats["tcp"] + stats["socks5"] + stats["tls"])
+	if processing < 0 {
+		processing = 0
 	}
 
 	return map[string]interface{}{
@@ -94,14 +128,22 @@ func prepareSingleReportData(result *tester.TestResult) map[string]interface{} {
 		"TotalCount":   result.TotalCount,
 		"SuccessCount": result.SuccessCount,
 		"FailedCount":  result.FailedCount,
-		"SuccessRate":  fmt.Sprintf("%.2f", successRate),
-		"AvgDNS":       fmt.Sprintf("%.2f", stats["dns"]),
-		"AvgTCP":       fmt.Sprintf("%.2f", stats["tcp"]),
-		"AvgSOCKS5":    fmt.Sprintf("%.2f", stats["socks5"]),
-		"AvgTLS":       fmt.Sprintf("%.2f", stats["tls"]),
-		"AvgTTFB":      fmt.Sprintf("%.2f", stats["ttfb"]),
-		"AvgTotal":     fmt.Sprintf("%.2f", stats["total"]),
-		"Metrics":      result.Metrics,
+		"SuccessRate":  successRate,
+		// Averages (Floats)
+		"AvgDNS":    stats["dns"],
+		"AvgTCP":    stats["tcp"],
+		"AvgSOCKS5": stats["socks5"],
+		"AvgTLS":    stats["tls"],
+		"AvgTTFB":   stats["ttfb"],
+		"AvgProc":   processing,
+		"AvgTotal":  stats["total"],
+		// Stats (Floats)
+		"MinTotal":    float64(totalStats.Min.Microseconds()) / 1000.0,
+		"MaxTotal":    float64(totalStats.Max.Microseconds()) / 1000.0,
+		"MedianTotal": float64(totalStats.Median.Microseconds()) / 1000.0,
+		"P95Total":    float64(totalStats.P95.Microseconds()) / 1000.0,
+		"P99Total":    float64(totalStats.P99.Microseconds()) / 1000.0,
+		"Metrics":     result.Metrics,
 	}
 }
 
@@ -114,6 +156,9 @@ func prepareBatchReportData(results []*tester.TestResult) BatchReportData {
 
 	for i, result := range results {
 		stats := calculateAverages(result)
+		allStats := tester.CalculateAllStats(result)
+		totalStats := allStats["total"]
+
 		successRate := 0.0
 		if result.TotalCount > 0 {
 			successRate = float64(result.SuccessCount) / float64(result.TotalCount) * 100
@@ -131,6 +176,11 @@ func prepareBatchReportData(results []*tester.TestResult) BatchReportData {
 			AvgTLS:      stats["tls"],
 			AvgTTFB:     stats["ttfb"],
 			AvgTotal:    stats["total"],
+			MinTotal:    float64(totalStats.Min.Microseconds()) / 1000.0,
+			MaxTotal:    float64(totalStats.Max.Microseconds()) / 1000.0,
+			MedianTotal: float64(totalStats.Median.Microseconds()) / 1000.0,
+			P95Total:    float64(totalStats.P95.Microseconds()) / 1000.0,
+			P99Total:    float64(totalStats.P99.Microseconds()) / 1000.0,
 		}
 
 		// Track best and worst performers
@@ -166,84 +216,126 @@ const singleReportTemplate = `<!DOCTYPE html>
     <title>Proxy Performance Report - {{.ProxyName}}</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --secondary: #ec4899;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --background: #f3f4f6;
+            --card-bg: #ffffff;
+            --text-main: #1f2937;
+            --text-muted: #6b7280;
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 20px;
-            min-height: 100vh;
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            background-color: var(--background);
+            color: var(--text-main);
+            line-height: 1.5;
+            padding: 2rem;
         }
+
         .container {
-            max-width: 1400px;
+            max-width: 1200px;
             margin: 0 auto;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        .header {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            padding: 3rem;
+            border-radius: 1.5rem;
+            color: white;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+            position: relative;
             overflow: hidden;
         }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 40px;
-            color: white;
+        .header::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -10%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
         }
-        .header h1 {
-            font-size: 32px;
-            margin-bottom: 10px;
-        }
-        .header p {
-            opacity: 0.9;
-            font-size: 14px;
-        }
+
+        .header h1 { font-size: 2.5rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.75rem; }
+        .header p { opacity: 0.9; font-size: 1.1rem; }
+        .header .meta { margin-top: 1.5rem; display: flex; gap: 2rem; font-size: 0.9rem; opacity: 0.8; }
+
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            padding: 30px;
-            background: #f8f9fa;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
         }
+
         .stat-card {
-            background: white;
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            background: var(--card-bg);
+            padding: 1.5rem;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
             transition: transform 0.2s;
         }
-        .stat-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        .stat-card:hover { transform: translateY(-4px); }
+        .stat-label { color: var(--text-muted); font-size: 0.875rem; font-weight: 600; text-transform: uppercase; margin-bottom: 0.5rem; }
+        .stat-value { font-size: 2rem; font-weight: 700; color: var(--primary); }
+        .stat-value.success { color: var(--success); }
+        .stat-unit { font-size: 1rem; color: var(--text-muted); margin-left: 0.25rem; }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 2rem;
+            margin-bottom: 2rem;
         }
-        .stat-label {
-            color: #6c757d;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 8px;
+
+        .card {
+            background: var(--card-bg);
+            padding: 2rem;
+            border-radius: 1.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         }
-        .stat-value {
-            font-size: 28px;
-            font-weight: bold;
-            color: #667eea;
-        }
-        .stat-unit {
-            font-size: 14px;
-            color: #6c757d;
-            margin-left: 4px;
-        }
-        .chart-section {
-            padding: 30px;
-        }
-        .chart-container {
-            position: relative;
-            height: 400px;
-            margin-top: 20px;
-        }
+
         .section-title {
-            font-size: 20px;
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-main);
+            border-left: 4px solid var(--primary);
+            padding-left: 1rem;
+        }
+
+        .chart-container { position: relative; height: 350px; }
+
+        .details-section { margin-top: 2rem; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.9rem; }
+        th { background: #f9fafb; padding: 1rem; text-align: left; font-weight: 600; color: var(--text-muted); border-bottom: 2px solid #e5e7eb; }
+        td { padding: 1rem; border-bottom: 1px solid #e5e7eb; color: var(--text-main); }
+        tr:hover { background-color: #f9fafb; }
+
+        .badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
             font-weight: 600;
-            color: #333;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #667eea;
+        }
+        .badge-success { background: #d1fae5; color: #065f46; }
+        .badge-error { background: #fee2e2; color: #991b1b; }
+
+        .metric-cell { font-family: ui-monospace, monospace; font-weight: 500; }
+        
+        @media (max-width: 1024px) {
+            .main-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -251,33 +343,92 @@ const singleReportTemplate = `<!DOCTYPE html>
     <div class="container">
         <div class="header">
             <h1>🚀 Proxy Performance Report</h1>
-            <p>Proxy: {{.ProxyName}} | Generated at: {{.GeneratedAt}}</p>
-            <p>Target: {{.TargetURL}}</p>
+            <p>Comprehensive latency analysis for your proxy infrastructure</p>
+            <div class="meta">
+                <span><strong>Proxy:</strong> {{.ProxyName}}</span>
+                <span><strong>Target:</strong> {{.TargetURL}}</span>
+                <span><strong>Generated:</strong> {{.GeneratedAt}}</span>
+            </div>
         </div>
 
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-label">Total Requests</div>
-                <div class="stat-value">{{.TotalCount}}</div>
-            </div>
-            <div class="stat-card">
                 <div class="stat-label">Success Rate</div>
-                <div class="stat-value">{{.SuccessRate}}<span class="stat-unit">%</span></div>
+                <div class="stat-value success">{{printf "%.2f" .SuccessRate}}<span class="stat-unit">%</span></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg TTFB</div>
-                <div class="stat-value">{{.AvgTTFB}}<span class="stat-unit">ms</span></div>
+                <div class="stat-label">Avg. Total Latency</div>
+                <div class="stat-value">{{printf "%.2f" .AvgTotal}}<span class="stat-unit">ms</span></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Total Time</div>
-                <div class="stat-value">{{.AvgTotal}}<span class="stat-unit">ms</span></div>
+                <div class="stat-label">P95 Latency</div>
+                <div class="stat-value">{{printf "%.2f" .P95Total}}<span class="stat-unit">ms</span></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">P99 Latency</div>
+                <div class="stat-value">{{printf "%.2f" .P99Total}}<span class="stat-unit">ms</span></div>
             </div>
         </div>
 
-        <div class="chart-section">
-            <div class="section-title">⏱️ Latency Breakdown</div>
-            <div class="chart-container">
-                <canvas id="latencyChart"></canvas>
+        <div class="main-grid">
+            <div class="card">
+                <div class="section-title">⏱️ Latency Breakdown (Average)</div>
+                <div class="chart-container">
+                    <canvas id="latencyChart"></canvas>
+                </div>
+            </div>
+            <div class="card">
+                <div class="section-title">📊 Percentile Analysis</div>
+                <table style="margin-top: 0">
+                    <tr><td>Minimum</td><td class="metric-cell">{{printf "%.2f" .MinTotal}} ms</td></tr>
+                    <tr><td>Median (P50)</td><td class="metric-cell">{{printf "%.2f" .MedianTotal}} ms</td></tr>
+                    <tr><td>Average</td><td class="metric-cell">{{printf "%.2f" .AvgTotal}} ms</td></tr>
+                    <tr><td>P95</td><td class="metric-cell">{{printf "%.2f" .P95Total}} ms</td></tr>
+                    <tr><td>P99</td><td class="metric-cell">{{printf "%.2f" .P99Total}} ms</td></tr>
+                    <tr><td>Maximum</td><td class="metric-cell">{{printf "%.2f" .MaxTotal}} ms</td></tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="card details-section">
+            <div class="section-title">📋 Detailed Request Log (Last 50)</div>
+            <div style="overflow-x: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Status</th>
+                            <th>DNS</th>
+                            <th>TCP</th>
+                            <th>SOCKS5</th>
+                            <th>TLS</th>
+                            <th>TTFB</th>
+                            <th>Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range $index, $m := .Metrics}}
+                        {{if lt $index 50}}
+                        <tr>
+                            <td>{{add $index 1}}</td>
+                            <td>
+                                {{if $m.Success}}
+                                <span class="badge badge-success">{{$m.StatusCode}} OK</span>
+                                {{else}}
+                                <span class="badge badge-error">{{if eq $m.StatusCode 0}}ERR{{else}}{{$m.StatusCode}}{{end}}</span>
+                                {{end}}
+                            </td>
+                            <td class="metric-cell">{{formatDuration $m.DNSLookup}}</td>
+                            <td class="metric-cell">{{formatDuration $m.TCPConnect}}</td>
+                            <td class="metric-cell">{{formatDuration $m.SOCKS5Handshake}}</td>
+                            <td class="metric-cell">{{formatDuration $m.TLSHandshake}}</td>
+                            <td class="metric-cell">{{formatDuration $m.TTFB}}</td>
+                            <td class="metric-cell"><strong>{{formatDuration $m.TotalTime}}</strong></td>
+                        </tr>
+                        {{end}}
+                        {{end}}
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -287,55 +438,46 @@ const singleReportTemplate = `<!DOCTYPE html>
         new Chart(ctx, {
             type: 'bar',
             data: {
-                labels: ['DNS Lookup', 'TCP Connect', 'SOCKS5 Handshake', 'TLS Handshake', 'TTFB'],
+                labels: ['DNS Lookup', 'TCP Connect', 'Socks5 Handshake', 'TLS Handshake', 'Server Processing'],
                 datasets: [{
-                    label: 'Average Latency (ms)',
-                    data: [{{.AvgDNS}}, {{.AvgTCP}}, {{.AvgSOCKS5}}, {{.AvgTLS}}, {{.AvgTTFB}}],
+                    label: 'Latency (ms)',
+                    data: [{{.AvgDNS}}, {{.AvgTCP}}, {{.AvgSOCKS5}}, {{.AvgTLS}}, {{.AvgProc}}],
                     backgroundColor: [
-                        'rgba(102, 126, 234, 0.8)',
-                        'rgba(118, 75, 162, 0.8)',
-                        'rgba(237, 100, 166, 0.8)',
-                        'rgba(255, 154, 158, 0.8)',
-                        'rgba(250, 208, 196, 0.8)'
+                        'rgba(99, 102, 241, 0.8)',
+                        'rgba(168, 85, 247, 0.8)',
+                        'rgba(236, 72, 153, 0.8)',
+                        'rgba(244, 63, 94, 0.8)',
+                        'rgba(249, 115, 22, 0.8)'
                     ],
-                    borderColor: [
-                        'rgba(102, 126, 234, 1)',
-                        'rgba(118, 75, 162, 1)',
-                        'rgba(237, 100, 166, 1)',
-                        'rgba(255, 154, 158, 1)',
-                        'rgba(250, 208, 196, 1)'
-                    ],
-                    borderWidth: 2,
-                    borderRadius: 8
+                    borderRadius: 8,
+                    barThickness: 40
                 }]
             },
             options: {
+                indexAxis: 'y',
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: {
                     legend: { display: false },
                     tooltip: {
-                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
                         padding: 12,
-                        titleFont: { size: 14 },
+                        backgroundColor: 'rgba(31, 41, 55, 0.9)',
+                        titleFont: { size: 14, weight: 'bold' },
                         bodyFont: { size: 13 },
-                        borderColor: 'rgba(102, 126, 234, 0.5)',
-                        borderWidth: 1
+                        callbacks: {
+                            label: (context) => {
+                                return ' ' + context.dataset.label + ': ' + context.parsed.x.toFixed(2) + ' ms';
+                            }
+                        }
                     }
                 },
                 scales: {
-                    y: {
-                        beginAtZero: true,
-                        grid: { color: 'rgba(0, 0, 0, 0.05)' },
-                        ticks: {
-                            callback: function(value) {
-                                return value + ' ms';
-                            }
-                        }
-                    },
                     x: {
-                        grid: { display: false }
-                    }
+                        beginAtZero: true,
+                        grid: { display: false },
+                        ticks: { callback: v => v + ' ms' }
+                    },
+                    y: { grid: { display: false } }
                 }
             }
         });
@@ -351,202 +493,169 @@ const batchReportTemplate = `<!DOCTYPE html>
     <title>Batch Proxy Performance Report</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --background: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 20px;
-            min-height: 100vh;
+            font-family: 'Inter', -apple-system, sans-serif;
+            background-color: var(--background);
+            color: var(--text-main);
+            padding: 2.5rem;
+            line-height: 1.6;
         }
-        .container {
-            max-width: 1600px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            overflow: hidden;
-        }
+
+        .container { max-width: 1400px; margin: 0 auto; }
+
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 40px;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            padding: 3.5rem;
+            border-radius: 2rem;
             color: white;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            margin-bottom: 3rem;
         }
-        .header h1 {
-            font-size: 36px;
-            margin-bottom: 10px;
+        .header h1 { font-size: 3rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 1rem; }
+        .header p { opacity: 0.9; font-size: 1.2rem; }
+
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin: 3rem 0 1.5rem;
             display: flex;
             align-items: center;
-            gap: 15px;
+            gap: 0.75rem;
+            color: var(--text-main);
         }
-        .header p {
-            opacity: 0.9;
-            font-size: 16px;
-        }
-        .content {
-            padding: 40px;
-        }
-        .section-title {
-            font-size: 24px;
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 25px;
-            padding-bottom: 10px;
-            border-bottom: 3px solid #667eea;
-        }
+
         .chart-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
-            gap: 30px;
-            margin-bottom: 40px;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 2rem;
         }
-        .chart-container {
-            background: #f8f9fa;
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+
+        .card {
+            background: var(--card-bg);
+            padding: 2rem;
+            border-radius: 1.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         }
-        .chart-container h3 {
-            color: #667eea;
-            margin-bottom: 20px;
-            font-size: 18px;
-        }
-        .chart-wrapper {
-            position: relative;
-            height: 350px;
-        }
-        table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            background: white;
-            border-radius: 12px;
+
+        .chart-container { position: relative; height: 350px; }
+
+        .table-responsive {
+            background: var(--card-bg);
+            border-radius: 1.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
             overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-top: 1rem;
         }
-        thead {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        th {
-            padding: 16px;
-            text-align: left;
-            font-weight: 600;
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        td {
-            padding: 16px;
-            border-bottom: 1px solid #e9ecef;
-        }
-        tbody tr {
-            transition: all 0.2s;
-        }
-        tbody tr:hover {
-            background: #f8f9fa;
-            transform: scale(1.01);
-        }
-        tbody tr:last-child td {
-            border-bottom: none;
-        }
-        .proxy-name {
-            font-weight: 600;
-            color: #667eea;
-        }
-        .best-badge {
-            display: inline-block;
-            background: #10b981;
-            color: white;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-            margin-left: 8px;
+
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #f1f5f9; padding: 1.25rem 1rem; text-align: left; font-weight: 600; color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        td { padding: 1.25rem 1rem; border-bottom: 1px solid #e2e8f0; font-size: 0.95rem; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover { background-color: #f8fafc; }
+
+        .proxy-info { display: flex; align-items: center; gap: 0.5rem; }
+        .proxy-name { font-weight: 700; color: var(--primary); }
+        
+        .badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 700;
             text-transform: uppercase;
         }
-        .worst-badge {
-            display: inline-block;
-            background: #ef4444;
-            color: white;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-            margin-left: 8px;
-            text-transform: uppercase;
-        }
+        .badge-best { background: #d1fae5; color: #065f46; border: 1px solid #34d399; }
+        .badge-worst { background: #fee2e2; color: #991b1b; border: 1px solid #f87171; }
+
         .success-rate {
-            display: inline-block;
-            padding: 6px 12px;
-            border-radius: 6px;
-            font-weight: 600;
+            font-weight: 700;
+            padding: 0.4rem 0.8rem;
+            border-radius: 0.5rem;
         }
-        .success-high { background: #d1fae5; color: #065f46; }
-        .success-medium { background: #fef3c7; color: #92400e; }
-        .success-low { background: #fee2e2; color: #991b1b; }
-        .metric-value {
-            font-family: 'Monaco', 'Courier New', monospace;
-            color: #4b5563;
+        .success-high { background: #ecfdf5; color: #059669; }
+        .success-mid  { background: #fffbeb; color: #d97706; }
+        .success-low  { background: #fef2f2; color: #dc2626; }
+
+        .metric-val { font-family: ui-monospace, monospace; font-weight: 500; text-align: right; }
+        .metric-val.total { font-weight: 700; color: var(--primary-dark); }
+        
+        @media (max-width: 768px) {
+            body { padding: 1rem; }
+            .chart-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>📊 Batch Proxy Performance Report</h1>
-            <p>Generated at: {{.GeneratedAt}} | Total Proxies Tested: {{.TotalProxies}}</p>
+            <h1>📊 Batch Proxy Report</h1>
+            <p>Comparative analysis of {{.TotalProxies}} proxy nodes | Generated at {{.GeneratedAt}}</p>
         </div>
 
-        <div class="content">
-            <div class="section-title">📈 Performance Charts</div>
-            <div class="chart-grid">
+        <div class="section-title">📈 Performance Comparison</div>
+        <div class="chart-grid">
+            <div class="card">
+                <h3 style="margin-bottom: 1.5rem">⚡ Average TTFB (ms)</h3>
                 <div class="chart-container">
-                    <h3>⚡ Average TTFB Comparison</h3>
-                    <div class="chart-wrapper">
-                        <canvas id="ttfbChart"></canvas>
-                    </div>
-                </div>
-                <div class="chart-container">
-                    <h3>⏱️ Total Latency Comparison</h3>
-                    <div class="chart-wrapper">
-                        <canvas id="totalChart"></canvas>
-                    </div>
+                    <canvas id="ttfbChart"></canvas>
                 </div>
             </div>
+            <div class="card">
+                <h3 style="margin-bottom: 1.5rem">⏱️ P95 Total Latency (ms)</h3>
+                <div class="chart-container">
+                    <canvas id="p95Chart"></canvas>
+                </div>
+            </div>
+        </div>
 
-            <div class="section-title">📋 Detailed Comparison Table</div>
+        <div class="section-title">📋 Detailed Performance Matrix</div>
+        <div class="table-responsive">
             <table>
                 <thead>
                     <tr>
-                        <th>Proxy Name</th>
-                        <th>Success Rate</th>
-                        <th>DNS (ms)</th>
-                        <th>TCP (ms)</th>
-                        <th>SOCKS5 (ms)</th>
-                        <th>TLS (ms)</th>
-                        <th>TTFB (ms)</th>
-                        <th>Total (ms)</th>
+                        <th>Proxy Node</th>
+                        <th style="text-align: center">Success</th>
+                        <th style="text-align: right">Avg DNS</th>
+                        <th style="text-align: right">SOCKS5</th>
+                        <th style="text-align: right">TTFB</th>
+                        <th style="text-align: right">P50 Total</th>
+                        <th style="text-align: right">P95 Total</th>
+                        <th style="text-align: right">Avg Total</th>
                     </tr>
                 </thead>
                 <tbody>
                     {{range .Proxies}}
                     <tr>
-                        <td class="proxy-name">
-                            {{.Name}}
-                            {{if .IsBest}}<span class="best-badge">⭐ Best</span>{{end}}
-                            {{if .IsWorst}}<span class="worst-badge">⚠️ Slow</span>{{end}}
-                        </td>
                         <td>
-                            <span class="success-rate {{if ge .SuccessRate 95.0}}success-high{{else if ge .SuccessRate 80.0}}success-medium{{else}}success-low{{end}}">
+                            <div class="proxy-info">
+                                <span class="proxy-name">{{.Name}}</span>
+                                {{if .IsBest}}<span class="badge badge-best">⭐ Best</span>{{end}}
+                                {{if .IsWorst}}<span class="badge badge-worst">⚠️ Slow</span>{{end}}
+                            </div>
+                        </td>
+                        <td style="text-align: center">
+                            <span class="success-rate {{if ge .SuccessRate 98.0}}success-high{{else if ge .SuccessRate 90.0}}success-mid{{else}}success-low{{end}}">
                                 {{printf "%.1f" .SuccessRate}}%
                             </span>
                         </td>
-                        <td class="metric-value">{{printf "%.2f" .AvgDNS}}</td>
-                        <td class="metric-value">{{printf "%.2f" .AvgTCP}}</td>
-                        <td class="metric-value">{{printf "%.2f" .AvgSOCKS5}}</td>
-                        <td class="metric-value">{{printf "%.2f" .AvgTLS}}</td>
-                        <td class="metric-value">{{printf "%.2f" .AvgTTFB}}</td>
-                        <td class="metric-value"><strong>{{printf "%.2f" .AvgTotal}}</strong></td>
+                        <td class="metric-val">{{printf "%.2f" .AvgDNS}}</td>
+                        <td class="metric-val">{{printf "%.2f" .AvgSOCKS5}}</td>
+                        <td class="metric-val">{{printf "%.2f" .AvgTTFB}}</td>
+                        <td class="metric-val">{{printf "%.2f" .MedianTotal}}</td>
+                        <td class="metric-val">{{printf "%.2f" .P95Total}}</td>
+                        <td class="metric-val total">{{printf "%.2f" .AvgTotal}} ms</td>
                     </tr>
                     {{end}}
                 </tbody>
@@ -556,17 +665,32 @@ const batchReportTemplate = `<!DOCTYPE html>
 
     <script>
         const proxyNames = [{{range .Proxies}}'{{.Name}}',{{end}}];
-        const ttfbData = [{{range .Proxies}}{{.AvgTTFB}},{{end}}];
-        const totalData = [{{range .Proxies}}{{.AvgTotal}},{{end}}];
+        
+        const chartOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    padding: 12,
+                    backgroundColor: 'rgba(30, 41, 59, 1)',
+                    titleFont: { size: 14, weight: 'bold' }
+                }
+            },
+            scales: {
+                y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { callback: v => v + ' ms' } },
+                x: { grid: { display: false } }
+            }
+        };
 
         const colors = [
-            'rgba(102, 126, 234, 0.8)',
-            'rgba(118, 75, 162, 0.8)',
-            'rgba(237, 100, 166, 0.8)',
-            'rgba(255, 154, 158, 0.8)',
-            'rgba(250, 208, 196, 0.8)',
-            'rgba(72, 187, 120, 0.8)',
-            'rgba(99, 179, 237, 0.8)',
+            'rgba(99, 102, 241, 0.8)',
+            'rgba(16, 185, 129, 0.8)',
+            'rgba(245, 158, 11, 0.8)',
+            'rgba(239, 68, 68, 0.8)',
+            'rgba(139, 92, 246, 0.8)',
+            'rgba(236, 72, 153, 0.8)',
+            'rgba(20, 184, 166, 0.8)'
         ];
 
         // TTFB Chart
@@ -575,70 +699,26 @@ const batchReportTemplate = `<!DOCTYPE html>
             data: {
                 labels: proxyNames,
                 datasets: [{
-                    label: 'TTFB (ms)',
-                    data: ttfbData,
+                    data: [{{range .Proxies}}{{.AvgTTFB}},{{end}}],
                     backgroundColor: colors,
-                    borderWidth: 0,
-                    borderRadius: 8
+                    borderRadius: 12
                 }]
             },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                        padding: 12,
-                        borderColor: 'rgba(102, 126, 234, 0.5)',
-                        borderWidth: 1
-                    }
-                },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        grid: { color: 'rgba(0, 0, 0, 0.05)' },
-                        ticks: { callback: value => value + ' ms' }
-                    },
-                    x: { grid: { display: false } }
-                }
-            }
+            options: chartOptions
         });
 
-        // Total Latency Chart
-        new Chart(document.getElementById('totalChart'), {
+        // P95 Chart
+        new Chart(document.getElementById('p95Chart'), {
             type: 'bar',
             data: {
                 labels: proxyNames,
                 datasets: [{
-                    label: 'Total Latency (ms)',
-                    data: totalData,
+                    data: [{{range .Proxies}}{{.P95Total}},{{end}}],
                     backgroundColor: colors,
-                    borderWidth: 0,
-                    borderRadius: 8
+                    borderRadius: 12
                 }]
             },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                        padding: 12,
-                        borderColor: 'rgba(102, 126, 234, 0.5)',
-                        borderWidth: 1
-                    }
-                },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        grid: { color: 'rgba(0, 0, 0, 0.05)' },
-                        ticks: { callback: value => value + ' ms' }
-                    },
-                    x: { grid: { display: false } }
-                }
-            }
+            options: chartOptions
         });
     </script>
 </body>

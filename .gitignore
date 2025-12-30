@@ -5,3 +5,4 @@
 /test*
 !benchmark/
 benchmark/bin/
+/reports/

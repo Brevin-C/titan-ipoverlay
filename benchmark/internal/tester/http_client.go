@@ -31,7 +31,7 @@ func NewHTTPClient(proxyAddr, proxyName, username, password string, timeout time
 		return nil, fmt.Errorf("invalid proxy address: %w", err)
 	}
 
-	// Create SOCKS5 dialer
+	// SOCKS5 auth
 	var auth *proxy.Auth
 	if username != "" || password != "" {
 		auth = &proxy.Auth{
@@ -40,18 +40,58 @@ func NewHTTPClient(proxyAddr, proxyName, username, password string, timeout time
 		}
 	}
 
-	dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, auth, proxy.Direct)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create SOCKS5 dialer: %w", err)
+	// Base TCP dialer
+	baseDialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
 	}
 
-	// Create HTTP transport with the SOCKS5 dialer
+	// Custom dial function for Transport
+	dialFunc := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		timings, _ := ctx.Value(timingKey{}).(*dialTiming)
+
+		// 1. TCP Connect to Proxy
+		start := time.Now()
+		tcpConn, err := baseDialer.DialContext(ctx, network, proxyURL.Host)
+		if err != nil {
+			return nil, err
+		}
+		tcpElapsed := time.Since(start)
+		if timings != nil {
+			timings.tcpConnect = tcpElapsed
+		}
+
+		// 2. SOCKS5 Handshake
+		start = time.Now()
+		dialer, err := proxy.SOCKS5(network, proxyURL.Host, auth, proxy.Direct)
+		if err != nil {
+			tcpConn.Close()
+			return nil, err
+		}
+
+		// We need to measure just the handshake.
+		// A better way is to use a custom SOCKS5 implementation, but since we are using proxy.SOCKS5:
+		conn, err := dialer.Dial(network, addr)
+		if err != nil {
+			return nil, err
+		}
+
+		if timings != nil {
+			// Total dial time minus TCP connect time is the handshake time
+			// Actually, proxy.Dialer.Dial(network, addr) does both: connects to proxy and handshakes.
+			// Since we want to distinguish:
+			timings.handshake = time.Since(start) - tcpElapsed
+		}
+
+		return conn, nil
+	}
+
 	transport := &http.Transport{
-		Dial: dialer.Dial,
+		DialContext: dialFunc,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
 		},
-		DisableKeepAlives:     true, // Ensure every request establishes a new connection
+		DisableKeepAlives:     true,
 		MaxIdleConns:          -1,
 		IdleConnTimeout:       1 * time.Nanosecond,
 		TLSHandshakeTimeout:   10 * time.Second,
@@ -73,11 +113,67 @@ func NewHTTPClient(proxyAddr, proxyName, username, password string, timeout time
 	}, nil
 }
 
+type timingKey struct{}
+
+type dialTiming struct {
+	tcpConnect time.Duration
+	handshake  time.Duration
+}
+
+type timingDialer struct {
+	proxy.Dialer
+	tcpDialer *net.Dialer
+	timings   *dialTiming
+}
+
+func (d *timingDialer) Dial(network, addr string) (net.Conn, error) {
+	start := time.Now()
+	// TCP Connect
+	tcpConn, err := d.tcpDialer.Dial(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	d.timings.tcpConnect = time.Since(start)
+
+	// SOCKS5 Handshake happens when we use this dialer as 'forward' or wrap it.
+	// Actually, the proxy.Dialer returned by proxy.SOCKS5 uses the forward dialer to connect to THE PROXY.
+	// So we need to measure the wrap.
+	return tcpConn, nil
+}
+
+type socksTimingDialer struct {
+	socksDialer proxy.Dialer
+	timings     *dialTiming
+}
+
+func (d *socksTimingDialer) Dial(network, addr string) (net.Conn, error) {
+	start := time.Now()
+	conn, err := d.socksDialer.Dial(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	totalDial := time.Since(start)
+	d.timings.handshake = totalDial - d.timings.tcpConnect
+	return conn, nil
+}
+
 // MakeRequest performs an HTTP request and collects timing metrics
 func (c *HTTPClient) MakeRequest(ctx context.Context, targetURL string) (*LatencyMetrics, error) {
 	metrics := &LatencyMetrics{
 		Success: false,
 	}
+
+	// Use a pointer to collect dial timings
+	timings := &dialTiming{}
+
+	// Setup custom dialer for this request if it's a proxy request
+	// Note: In NewHTTPClient we set the dialer. Here we might need to override it per request
+	// but Transport.Dial is fixed.
+	// Optimization: We can't easily change Transport.Dial per request without creating a new Transport.
+	// However, we are already disabling KeepAlives, so we can afford a bit more overhead.
+	// Alternative: Use context to pass a "timing collector" to the dialer already set in Transport.
+
+	ctx = context.WithValue(ctx, timingKey{}, timings)
 
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
@@ -95,8 +191,6 @@ func (c *HTTPClient) MakeRequest(ctx context.Context, targetURL string) (*Latenc
 	var (
 		dnsStart     time.Time
 		dnsDone      time.Time
-		connectStart time.Time
-		connectDone  time.Time
 		tlsStart     time.Time
 		tlsDone      time.Time
 		gotFirstByte time.Time
@@ -110,18 +204,8 @@ func (c *HTTPClient) MakeRequest(ctx context.Context, targetURL string) (*Latenc
 		DNSDone: func(_ httptrace.DNSDoneInfo) {
 			dnsDone = time.Now()
 		},
-		ConnectStart: func(_, _ string) {
-			connectStart = time.Now()
-		},
-		ConnectDone: func(_, _ string, err error) {
-			connectDone = time.Now()
-		},
 		TLSHandshakeStart: func() {
 			tlsStart = time.Now()
-			// If connectDone hasn't been set yet (can happen in some Go versions with custom dialers)
-			if connectDone.IsZero() {
-				connectDone = tlsStart
-			}
 		},
 		TLSHandshakeDone: func(_ tls.ConnectionState, _ error) {
 			tlsDone = time.Now()
@@ -131,26 +215,11 @@ func (c *HTTPClient) MakeRequest(ctx context.Context, targetURL string) (*Latenc
 		},
 	}
 
-	req = req.WithContext(httptrace.WithClientTrace(ctx, trace))
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 
-	// Track actual start of the request call
-	actualCallStart := time.Now()
+	// Execute request
 	resp, err := c.client.Do(req)
 	requestEnd := time.Now()
-
-	// Ensure connectStart/Done are set if the trace missed them
-	if connectStart.IsZero() {
-		connectStart = actualCallStart
-	}
-	if connectDone.IsZero() {
-		if !tlsStart.IsZero() {
-			connectDone = tlsStart
-		} else if !gotFirstByte.IsZero() {
-			connectDone = gotFirstByte
-		} else {
-			connectDone = requestEnd
-		}
-	}
 
 	if err != nil {
 		metrics.Error = fmt.Sprintf("request failed: %v", err)
@@ -164,16 +233,9 @@ func (c *HTTPClient) MakeRequest(ctx context.Context, targetURL string) (*Latenc
 		metrics.DNSLookup = dnsDone.Sub(dnsStart)
 	}
 
-	if !connectStart.IsZero() && !connectDone.IsZero() {
-		metrics.TCPConnect = connectDone.Sub(connectStart)
-
-		// Estimate SOCKS5 handshake time (part of TCP connect when using proxy)
-		// This is an approximation - actual SOCKS5 handshake is embedded in the connect phase
-		if !tlsStart.IsZero() {
-			// SOCKS5 handshake is between TCP connect and TLS start
-			metrics.SOCKS5Handshake = tlsStart.Sub(connectDone)
-		}
-	}
+	// Extract timings from context-filled collector
+	metrics.TCPConnect = timings.tcpConnect
+	metrics.SOCKS5Handshake = timings.handshake
 
 	if !tlsStart.IsZero() && !tlsDone.IsZero() {
 		metrics.TLSHandshake = tlsDone.Sub(tlsStart)
@@ -196,16 +258,33 @@ func (c *HTTPClient) MakeRequest(ctx context.Context, targetURL string) (*Latenc
 
 // NewDirectHTTPClient creates an HTTP client without proxy (for direct connection testing)
 func NewDirectHTTPClient(timeout time.Duration) *HTTPClient {
+	baseDialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
+	dialFunc := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		timings, _ := ctx.Value(timingKey{}).(*dialTiming)
+		start := time.Now()
+		conn, err := baseDialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		if timings != nil {
+			timings.tcpConnect = time.Since(start)
+		}
+		return conn, nil
+	}
+
 	httpClient := &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout: 10 * time.Second,
-			MaxIdleConns:        100,
-			IdleConnTimeout:     90 * time.Second,
+			DialContext:           dialFunc,
+			TLSHandshakeTimeout:   10 * time.Second,
+			DisableKeepAlives:     true,
+			MaxIdleConns:          -1,
+			IdleConnTimeout:       1 * time.Nanosecond,
+			ExpectContinueTimeout: 1 * time.Second,
 		},
 	}
 
