@@ -127,10 +127,10 @@ func prepareSingleReportData(result *tester.TestResult) map[string]interface{} {
 	}
 
 	// Determine test type from test name
-	testType := "Single Request"
+	testType := "Sequential Sampling (10-worker pool)"
 	concurrency := 0
 	if strings.Contains(strings.ToLower(result.TestName), "并发") || strings.Contains(strings.ToLower(result.TestName), "concurrent") {
-		testType = "Concurrent"
+		testType = "Concurrent Load Test"
 		// Try to extract concurrency number from test name
 		for _, word := range strings.Fields(result.TestName) {
 			if num, err := strconv.Atoi(strings.TrimSuffix(word, "并发")); err == nil {
