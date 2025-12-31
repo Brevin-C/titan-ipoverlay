@@ -81,9 +81,11 @@ func (e *Exporter) exportCSV(result *tester.TestResult, baseName string) error {
 		"Target URL",
 		"Success",
 		"Status Code",
-		"DNS Lookup (ms)",
-		"TCP Connect (ms)",
+		"Proxy DNS (ms)", // New: Proxy DNS resolution
+		"Proxy TCP (ms)", // New: TCP to proxy server
 		"SOCKS5 Handshake (ms)",
+		"Target DNS (ms)", // Renamed for clarity
+		"Target TCP (ms)", // Renamed for clarity
 		"TLS Handshake (ms)",
 		"TTFB (ms)",
 		"Total Time (ms)",
@@ -101,9 +103,11 @@ func (e *Exporter) exportCSV(result *tester.TestResult, baseName string) error {
 			result.TargetURL,
 			fmt.Sprintf("%t", metric.Success),
 			fmt.Sprintf("%d", metric.StatusCode),
+			fmt.Sprintf("%.2f", float64(metric.ProxyDNS.Microseconds())/1000.0),
+			fmt.Sprintf("%.2f", float64(metric.ProxyTCP.Microseconds())/1000.0),
+			fmt.Sprintf("%.2f", float64(metric.SOCKS5Handshake.Microseconds())/1000.0),
 			fmt.Sprintf("%.2f", float64(metric.DNSLookup.Microseconds())/1000.0),
 			fmt.Sprintf("%.2f", float64(metric.TCPConnect.Microseconds())/1000.0),
-			fmt.Sprintf("%.2f", float64(metric.SOCKS5Handshake.Microseconds())/1000.0),
 			fmt.Sprintf("%.2f", float64(metric.TLSHandshake.Microseconds())/1000.0),
 			fmt.Sprintf("%.2f", float64(metric.TTFB.Microseconds())/1000.0),
 			fmt.Sprintf("%.2f", float64(metric.TotalTime.Microseconds())/1000.0),
@@ -270,18 +274,20 @@ func (e *Exporter) exportBatchJSON(results []*tester.TestResult, baseName string
 func calculateAverages(result *tester.TestResult) map[string]float64 {
 	if result.SuccessCount == 0 {
 		return map[string]float64{
-			"dns": 0, "tcp": 0, "socks5": 0, "tls": 0, "ttfb": 0, "total": 0,
+			"proxy_dns": 0, "proxy_tcp": 0, "socks5": 0, "dns": 0, "tcp": 0, "tls": 0, "ttfb": 0, "proc": 0, "total": 0,
 		}
 	}
 
-	var sumDNS, sumTCP, sumSOCKS5, sumTLS, sumTTFB, sumTotal int64
+	var sumProxyDNS, sumProxyTCP, sumSOCKS5, sumDNS, sumTCP, sumTLS, sumTTFB, sumTotal int64
 	count := 0
 
 	for _, m := range result.Metrics {
 		if m.Success {
+			sumProxyDNS += m.ProxyDNS.Microseconds()
+			sumProxyTCP += m.ProxyTCP.Microseconds()
+			sumSOCKS5 += m.SOCKS5Handshake.Microseconds()
 			sumDNS += m.DNSLookup.Microseconds()
 			sumTCP += m.TCPConnect.Microseconds()
-			sumSOCKS5 += m.SOCKS5Handshake.Microseconds()
 			sumTLS += m.TLSHandshake.Microseconds()
 			sumTTFB += m.TTFB.Microseconds()
 			sumTotal += m.TotalTime.Microseconds()
@@ -291,16 +297,34 @@ func calculateAverages(result *tester.TestResult) map[string]float64 {
 
 	if count == 0 {
 		return map[string]float64{
-			"dns": 0, "tcp": 0, "socks5": 0, "tls": 0, "ttfb": 0, "total": 0,
+			"proxy_dns": 0, "proxy_tcp": 0, "socks5": 0, "dns": 0, "tcp": 0, "tls": 0, "ttfb": 0, "proc": 0, "total": 0,
 		}
 	}
 
+	avgProxyDNS := float64(sumProxyDNS) / float64(count) / 1000.0
+	avgProxyTCP := float64(sumProxyTCP) / float64(count) / 1000.0
+	avgSOCKS5 := float64(sumSOCKS5) / float64(count) / 1000.0
+	avgDNS := float64(sumDNS) / float64(count) / 1000.0
+	avgTCP := float64(sumTCP) / float64(count) / 1000.0
+	avgTLS := float64(sumTLS) / float64(count) / 1000.0
+	avgTTFB := float64(sumTTFB) / float64(count) / 1000.0
+	avgTotal := float64(sumTotal) / float64(count) / 1000.0
+
+	// Server Processing = TTFB - (Proxy DNS + Proxy TCP + SOCKS5 + Target DNS + Target TCP + TLS)
+	avgProc := avgTTFB - (avgProxyDNS + avgProxyTCP + avgSOCKS5 + avgDNS + avgTCP + avgTLS)
+	if avgProc < 0 {
+		avgProc = 0
+	}
+
 	return map[string]float64{
-		"dns":    float64(sumDNS) / float64(count) / 1000.0,
-		"tcp":    float64(sumTCP) / float64(count) / 1000.0,
-		"socks5": float64(sumSOCKS5) / float64(count) / 1000.0,
-		"tls":    float64(sumTLS) / float64(count) / 1000.0,
-		"ttfb":   float64(sumTTFB) / float64(count) / 1000.0,
-		"total":  float64(sumTotal) / float64(count) / 1000.0,
+		"proxy_dns": avgProxyDNS,
+		"proxy_tcp": avgProxyTCP,
+		"socks5":    avgSOCKS5,
+		"dns":       avgDNS,
+		"tcp":       avgTCP,
+		"tls":       avgTLS,
+		"ttfb":      avgTTFB,
+		"proc":      avgProc,
+		"total":     avgTotal,
 	}
 }

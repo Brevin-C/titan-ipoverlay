@@ -44,11 +44,12 @@ func NewHTTPClient(proxyAddr, proxyName, username, password string, timeout time
 		timings, _ := ctx.Value(timingKey{}).(*dialTiming)
 
 		// Create a forward dialer that SOCKS5 will use to connect to the proxy.
-		// We wrap it to capture the TCP connection time to the proxy server itself.
+		// We wrap it to capture the DNS and TCP connection time to the proxy server itself.
 		forward := &forwardDialer{
-			dialContext: baseDialer.DialContext,
-			ctx:         ctx,
-			timings:     timings,
+			dialContext:  baseDialer.DialContext,
+			ctx:          ctx,
+			timings:      timings,
+			proxyAddress: proxyAddr, // Pass proxy address for DNS resolution
 		}
 
 		// Create SOCKS5 dialer using our forwarder to connect to proxyAddr
@@ -106,22 +107,48 @@ func NewHTTPClient(proxyAddr, proxyName, username, password string, timeout time
 type timingKey struct{}
 
 type dialTiming struct {
-	tcpConnect time.Duration
-	handshake  time.Duration
+	proxyDNS   time.Duration // DNS resolution of proxy server
+	tcpConnect time.Duration // TCP connection to proxy server
+	handshake  time.Duration // SOCKS5 handshake time
 }
 
 type forwardDialer struct {
-	dialContext func(ctx context.Context, network, address string) (net.Conn, error)
-	ctx         context.Context
-	timings     *dialTiming
+	dialContext  func(ctx context.Context, network, address string) (net.Conn, error)
+	ctx          context.Context
+	timings      *dialTiming
+	resolver     *net.Resolver
+	proxyAddress string // Store proxy address to resolve its DNS
 }
 
 func (f *forwardDialer) Dial(network, address string) (net.Conn, error) {
-	start := time.Now()
+	// If the proxy address is a domain name (not IP), resolve it first
+	if f.timings != nil && f.proxyAddress != "" {
+		host, port, err := net.SplitHostPort(f.proxyAddress)
+		if err == nil {
+			// Check if host is a domain name (not an IP)
+			if net.ParseIP(host) == nil {
+				// It's a domain name, measure DNS resolution
+				dnsStart := time.Now()
+				if f.resolver == nil {
+					f.resolver = &net.Resolver{}
+				}
+				_, err := f.resolver.LookupHost(f.ctx, host)
+				if err == nil {
+					f.timings.proxyDNS = time.Since(dnsStart)
+				}
+				// Reconstruct address with resolved host
+				address = net.JoinHostPort(host, port)
+			}
+		}
+	}
+
+	// Now measure TCP connection time
+	connStart := time.Now()
 	conn, err := f.dialContext(f.ctx, network, address)
 	if err == nil && f.timings != nil {
-		f.timings.tcpConnect = time.Since(start)
+		f.timings.tcpConnect = time.Since(connStart)
 	}
+
 	return conn, err
 }
 
@@ -194,8 +221,9 @@ func (c *HTTPClient) MakeRequest(ctx context.Context, targetURL string) (*Latenc
 		metrics.DNSLookup = dnsDone.Sub(dnsStart)
 	}
 
-	// Extract timings from context-filled collector
-	metrics.TCPConnect = timings.tcpConnect
+	// Extract proxy connection timings from context-filled collector
+	metrics.ProxyDNS = timings.proxyDNS
+	metrics.ProxyTCP = timings.tcpConnect
 	metrics.SOCKS5Handshake = timings.handshake
 
 	if !tlsStart.IsZero() && !tlsDone.IsZero() {

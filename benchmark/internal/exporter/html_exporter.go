@@ -398,9 +398,11 @@ const singleReportTemplate = `<!DOCTYPE html>
                         <tr>
                             <th>#</th>
                             <th>Status</th>
-                            <th>DNS</th>
-                            <th>TCP</th>
+                            <th>Proxy DNS</th>
+                            <th>Proxy TCP</th>
                             <th>SOCKS5</th>
+                            <th>Tgt DNS</th>
+                            <th>Tgt TCP</th>
                             <th>TLS</th>
                             <th>TTFB</th>
                             <th>Total</th>
@@ -418,9 +420,11 @@ const singleReportTemplate = `<!DOCTYPE html>
                                 <span class="badge badge-error">{{if eq $m.StatusCode 0}}ERR{{else}}{{$m.StatusCode}}{{end}}</span>
                                 {{end}}
                             </td>
+                            <td class="metric-cell">{{formatDuration $m.ProxyDNS}}</td>
+                            <td class="metric-cell">{{formatDuration $m.ProxyTCP}}</td>
+                            <td class="metric-cell">{{formatDuration $m.SOCKS5Handshake}}</td>
                             <td class="metric-cell">{{formatDuration $m.DNSLookup}}</td>
                             <td class="metric-cell">{{formatDuration $m.TCPConnect}}</td>
-                            <td class="metric-cell">{{formatDuration $m.SOCKS5Handshake}}</td>
                             <td class="metric-cell">{{formatDuration $m.TLSHandshake}}</td>
                             <td class="metric-cell">{{formatDuration $m.TTFB}}</td>
                             <td class="metric-cell"><strong>{{formatDuration $m.TotalTime}}</strong></td>
@@ -438,16 +442,18 @@ const singleReportTemplate = `<!DOCTYPE html>
         new Chart(ctx, {
             type: 'bar',
             data: {
-                labels: ['DNS Lookup', 'TCP Connect', 'Socks5 Handshake', 'TLS Handshake', 'Server Processing'],
+                labels: ['Proxy DNS', 'Proxy TCP', 'SOCKS5', 'Target DNS', 'Target TCP', 'TLS', 'Server Proc'],
                 datasets: [{
                     label: 'Latency (ms)',
-                    data: [{{.AvgDNS}}, {{.AvgTCP}}, {{.AvgSOCKS5}}, {{.AvgTLS}}, {{.AvgProc}}],
+                    data: [{{.AvgProxyDNS}}, {{.AvgProxyTCP}}, {{.AvgSOCKS5}}, {{.AvgDNS}}, {{.AvgTCP}}, {{.AvgTLS}}, {{.AvgProc}}],
                     backgroundColor: [
-                        'rgba(99, 102, 241, 0.8)',
-                        'rgba(168, 85, 247, 0.8)',
-                        'rgba(236, 72, 153, 0.8)',
-                        'rgba(244, 63, 94, 0.8)',
-                        'rgba(249, 115, 22, 0.8)'
+                        'rgba(139, 92, 246, 0.8)',   // Purple for Proxy DNS
+                        'rgba(99, 102, 241, 0.8)',   // Indigo for Proxy TCP
+                        'rgba(59, 130, 246, 0.8)',   // Blue for SOCKS5
+                        'rgba(14, 165, 233, 0.8)',   // Sky for Target DNS
+                        'rgba(6, 182, 212, 0.8)',    // Cyan for Target TCP
+                        'rgba(236, 72, 153, 0.8)',    // Pink for TLS
+                        'rgba(249, 115, 22, 0.8)'    // Orange for Server Processing
                     ],
                     borderRadius: 8,
                     barThickness: 40

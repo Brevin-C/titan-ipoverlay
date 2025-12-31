@@ -6,15 +6,22 @@ import (
 
 // LatencyMetrics contains all timing metrics for a request
 type LatencyMetrics struct {
-	DNSLookup       time.Duration // DNS resolution time
-	TCPConnect      time.Duration // TCP connection establishment
-	SOCKS5Handshake time.Duration // SOCKS5 proxy handshake (estimated)
-	TLSHandshake    time.Duration // TLS handshake time
-	TTFB            time.Duration // Time to first byte
-	TotalTime       time.Duration // Total end-to-end time
-	Success         bool          // Whether the request succeeded
-	Error           string        // Error message if failed
-	StatusCode      int           // HTTP status code
+	// Proxy connection metrics (when using SOCKS5)
+	ProxyDNS        time.Duration // DNS resolution of proxy server (if domain is used)
+	ProxyTCP        time.Duration // TCP connection to proxy server
+	SOCKS5Handshake time.Duration // SOCKS5 proxy handshake
+
+	// Target website metrics
+	DNSLookup    time.Duration // DNS resolution of target website
+	TCPConnect   time.Duration // TCP connection to target (through proxy or direct)
+	TLSHandshake time.Duration // TLS handshake time
+	TTFB         time.Duration // Time to first byte
+	TotalTime    time.Duration // Total end-to-end time
+
+	// Request result
+	Success    bool   // Whether the request succeeded
+	Error      string // Error message if failed
+	StatusCode int    // HTTP status code
 }
 
 // TestResult represents the aggregated results for a test run

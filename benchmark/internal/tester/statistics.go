@@ -86,12 +86,16 @@ func ExtractMetricDurations(metrics []LatencyMetrics, metricType string) []time.
 
 		var duration time.Duration
 		switch metricType {
+		case "proxy_dns":
+			duration = m.ProxyDNS
+		case "proxy_tcp":
+			duration = m.ProxyTCP
+		case "socks5":
+			duration = m.SOCKS5Handshake
 		case "dns":
 			duration = m.DNSLookup
 		case "tcp":
 			duration = m.TCPConnect
-		case "socks5":
-			duration = m.SOCKS5Handshake
 		case "tls":
 			duration = m.TLSHandshake
 		case "ttfb":
@@ -112,7 +116,7 @@ func ExtractMetricDurations(metrics []LatencyMetrics, metricType string) []time.
 func CalculateAllStats(result *TestResult) map[string]*Stats {
 	statsMap := make(map[string]*Stats)
 
-	metricTypes := []string{"dns", "tcp", "socks5", "tls", "ttfb", "total"}
+	metricTypes := []string{"proxy_dns", "proxy_tcp", "socks5", "dns", "tcp", "tls", "ttfb", "total"}
 
 	for _, metricType := range metricTypes {
 		durations := ExtractMetricDurations(result.Metrics, metricType)
