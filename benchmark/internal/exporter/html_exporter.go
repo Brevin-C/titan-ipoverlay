@@ -5,6 +5,8 @@ import (
 	"html/template"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"titan-ipoverlay/benchmark/internal/tester"
@@ -76,6 +78,9 @@ func (e *Exporter) exportBatchHTML(results []*tester.TestResult, baseName string
 // ProxyData holds data for a single proxy in the report
 type ProxyData struct {
 	Name        string
+	ProxyServer string // SOCKS5 server address
+	TestType    string // Test type: "Single" or "Concurrent"
+	Concurrency int    // Concurrency level (0 for single)
 	TargetURL   string
 	TotalCount  int
 	SuccessRate float64
@@ -121,8 +126,25 @@ func prepareSingleReportData(result *tester.TestResult) map[string]interface{} {
 		processing = 0
 	}
 
+	// Determine test type from test name
+	testType := "Single Request"
+	concurrency := 0
+	if strings.Contains(strings.ToLower(result.TestName), "并发") || strings.Contains(strings.ToLower(result.TestName), "concurrent") {
+		testType = "Concurrent"
+		// Try to extract concurrency number from test name
+		for _, word := range strings.Fields(result.TestName) {
+			if num, err := strconv.Atoi(strings.TrimSuffix(word, "并发")); err == nil {
+				concurrency = num
+				break
+			}
+		}
+	}
+
 	return map[string]interface{}{
 		"ProxyName":    result.ProxyName,
+		"TestName":     result.TestName,
+		"TestType":     testType,
+		"Concurrency":  concurrency,
 		"TargetURL":    result.TargetURL,
 		"GeneratedAt":  time.Now().Format("2006-01-02 15:04:05"),
 		"TotalCount":   result.TotalCount,
@@ -130,20 +152,22 @@ func prepareSingleReportData(result *tester.TestResult) map[string]interface{} {
 		"FailedCount":  result.FailedCount,
 		"SuccessRate":  successRate,
 		// Averages (Floats)
-		"AvgDNS":    stats["dns"],
-		"AvgTCP":    stats["tcp"],
-		"AvgSOCKS5": stats["socks5"],
-		"AvgTLS":    stats["tls"],
-		"AvgTTFB":   stats["ttfb"],
-		"AvgProc":   processing,
-		"AvgTotal":  stats["total"],
+		"AvgProxyDNS": stats["proxy_dns"],
+		"AvgProxyTCP": stats["proxy_tcp"],
+		"AvgSOCKS5":   stats["socks5"],
+		"AvgDNS":      stats["dns"],
+		"AvgTCP":      stats["tcp"],
+		"AvgTLS":      stats["tls"],
+		"AvgProc":     processing,
+		"AvgTTFB":     stats["ttfb"],
+		"AvgTotal":    stats["total"],
 		// Stats (Floats)
-		"MinTotal":    float64(totalStats.Min.Microseconds()) / 1000.0,
-		"MaxTotal":    float64(totalStats.Max.Microseconds()) / 1000.0,
-		"MedianTotal": float64(totalStats.Median.Microseconds()) / 1000.0,
-		"P95Total":    float64(totalStats.P95.Microseconds()) / 1000.0,
-		"P99Total":    float64(totalStats.P99.Microseconds()) / 1000.0,
-		"Metrics":     result.Metrics,
+		"MinTotal": float64(totalStats.Min.Microseconds()) / 1000.0,
+		"MaxTotal": float64(totalStats.Max.Microseconds()) / 1000.0,
+		"P50Total": float64(totalStats.Median.Microseconds()) / 1000.0,
+		"P95Total": float64(totalStats.P95.Microseconds()) / 1000.0,
+		"P99Total": float64(totalStats.P99.Microseconds()) / 1000.0,
+		"Metrics":  result.Metrics,
 	}
 }
 
@@ -348,6 +372,11 @@ const singleReportTemplate = `<!DOCTYPE html>
                 <span><strong>Proxy:</strong> {{.ProxyName}}</span>
                 <span><strong>Target:</strong> {{.TargetURL}}</span>
                 <span><strong>Generated:</strong> {{.GeneratedAt}}</span>
+            </div>
+            <div class="meta" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(99, 102, 241, 0.2);">
+                <span><strong>Test:</strong> {{.TestName}}</span>
+                <span><strong>Type:</strong> {{.TestType}}{{if gt .Concurrency 0}} ({{.Concurrency}} concurrent){{end}}</span>
+                <span><strong>Samples:</strong> {{.TotalCount}}</span>
             </div>
         </div>
 
