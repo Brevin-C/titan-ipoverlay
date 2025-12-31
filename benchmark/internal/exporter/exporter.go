@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"titan-ipoverlay/benchmark/internal/tester"
@@ -119,6 +120,119 @@ func (e *Exporter) exportCSV(result *tester.TestResult, baseName string) error {
 	}
 
 	fmt.Printf("✓ CSV report exported to: %s\n", filename)
+
+	// Also export failures to a separate file if there are any
+	if result.FailedCount > 0 {
+		if err := e.exportFailuresCSV(result, baseName); err != nil {
+			fmt.Printf("⚠ Warning: failed to export failures CSV: %v\n", err)
+		}
+	}
+
+	return nil
+}
+
+// exportFailuresCSV exports only failed requests to a separate CSV file for analysis
+func (e *Exporter) exportFailuresCSV(result *tester.TestResult, baseName string) error {
+	filename := filepath.Join(e.outputDir, baseName+"_failures.csv")
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write header with additional analysis columns
+	header := []string{
+		"#",
+		"Timestamp",
+		"Status Code",
+		"Error Type",
+		"Error Message",
+		"Proxy DNS (ms)",
+		"Proxy TCP (ms)",
+		"SOCKS5 (ms)",
+		"Target DNS (ms)",
+		"Target TCP (ms)",
+		"TLS (ms)",
+		"TTFB (ms)",
+		"Total (ms)",
+		"Completed Stage",
+	}
+	if err := writer.Write(header); err != nil {
+		return err
+	}
+
+	// Write only failed requests
+	failureIndex := 1
+	for idx, metric := range result.Metrics {
+		if metric.Success {
+			continue // Skip successful requests
+		}
+
+		// Determine error type
+		errorType := "Unknown"
+		if metric.Error != "" {
+			if len(metric.Error) > 0 {
+				switch {
+				case regexp.MustCompile(`EOF`).MatchString(metric.Error):
+					errorType = "EOF (Connection Reset)"
+				case regexp.MustCompile(`timeout|Timeout`).MatchString(metric.Error):
+					errorType = "Timeout"
+				case regexp.MustCompile(`connection refused`).MatchString(metric.Error):
+					errorType = "Connection Refused"
+				case regexp.MustCompile(`TLS|tls`).MatchString(metric.Error):
+					errorType = "TLS Error"
+				case regexp.MustCompile(`DNS|dns`).MatchString(metric.Error):
+					errorType = "DNS Error"
+				case regexp.MustCompile(`SOCKS|socks`).MatchString(metric.Error):
+					errorType = "SOCKS5 Error"
+				case metric.StatusCode >= 400:
+					errorType = fmt.Sprintf("HTTP %d", metric.StatusCode)
+				default:
+					errorType = "Network Error"
+				}
+			}
+		}
+
+		// Determine which stage was completed before failure
+		completedStage := "Unknown"
+		if metric.ProxyTCP > 0 && metric.SOCKS5Handshake == 0 {
+			completedStage = "Proxy TCP Connected"
+		} else if metric.SOCKS5Handshake > 0 && metric.TLSHandshake == 0 {
+			completedStage = "SOCKS5 Handshake"
+		} else if metric.TLSHandshake > 0 && metric.TTFB == 0 {
+			completedStage = "TLS Handshake"
+		} else if metric.TTFB > 0 {
+			completedStage = "Data Transfer"
+		} else {
+			completedStage = "Initial Connection"
+		}
+
+		row := []string{
+			fmt.Sprintf("%d", failureIndex),
+			result.StartTime.Add(time.Duration(idx) * 100 * time.Millisecond).Format("15:04:05"),
+			fmt.Sprintf("%d", metric.StatusCode),
+			errorType,
+			metric.Error,
+			fmt.Sprintf("%.2f", float64(metric.ProxyDNS.Microseconds())/1000.0),
+			fmt.Sprintf("%.2f", float64(metric.ProxyTCP.Microseconds())/1000.0),
+			fmt.Sprintf("%.2f", float64(metric.SOCKS5Handshake.Microseconds())/1000.0),
+			fmt.Sprintf("%.2f", float64(metric.DNSLookup.Microseconds())/1000.0),
+			fmt.Sprintf("%.2f", float64(metric.TCPConnect.Microseconds())/1000.0),
+			fmt.Sprintf("%.2f", float64(metric.TLSHandshake.Microseconds())/1000.0),
+			fmt.Sprintf("%.2f", float64(metric.TTFB.Microseconds())/1000.0),
+			fmt.Sprintf("%.2f", float64(metric.TotalTime.Microseconds())/1000.0),
+			completedStage,
+		}
+		if err := writer.Write(row); err != nil {
+			return err
+		}
+		failureIndex++
+	}
+
+	fmt.Printf("✓ Failures CSV exported to: %s (%d failures)\n", filename, result.FailedCount)
 	return nil
 }
 

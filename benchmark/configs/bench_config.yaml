@@ -42,7 +42,7 @@ targets:
 # 💡 批量测试: 配置多个代理，使用 --test-all-proxies 可一次测试所有代理
 proxies:
   titan:
-    socks5: "46.250.235.241:41003"
+    socks5: "117.55.199.29:41003"
     name: "泰坦代理"
     username: "00008_yuanrenxue0001"
     password: "yuanrenxue0001"
