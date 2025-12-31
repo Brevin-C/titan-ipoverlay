@@ -142,6 +142,7 @@ func prepareSingleReportData(result *tester.TestResult) map[string]interface{} {
 
 	return map[string]interface{}{
 		"ProxyName":    result.ProxyName,
+		"ProxyServer":  result.ProxyServer,
 		"TestName":     result.TestName,
 		"TestType":     testType,
 		"Concurrency":  concurrency,
