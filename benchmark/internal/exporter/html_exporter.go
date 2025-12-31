@@ -370,6 +370,7 @@ const singleReportTemplate = `<!DOCTYPE html>
             <p>Comprehensive latency analysis for your proxy infrastructure</p>
             <div class="meta">
                 <span><strong>Proxy:</strong> {{.ProxyName}}</span>
+                <span><strong>Server:</strong> {{.ProxyServer}}</span>
                 <span><strong>Target:</strong> {{.TargetURL}}</span>
                 <span><strong>Generated:</strong> {{.GeneratedAt}}</span>
             </div>
@@ -410,7 +411,7 @@ const singleReportTemplate = `<!DOCTYPE html>
                 <div class="section-title">📊 Percentile Analysis</div>
                 <table style="margin-top: 0">
                     <tr><td>Minimum</td><td class="metric-cell">{{printf "%.2f" .MinTotal}} ms</td></tr>
-                    <tr><td>Median (P50)</td><td class="metric-cell">{{printf "%.2f" .MedianTotal}} ms</td></tr>
+                    <tr><td>Median (P50)</td><td class="metric-cell">{{printf "%.2f" .P50Total}} ms</td></tr>
                     <tr><td>Average</td><td class="metric-cell">{{printf "%.2f" .AvgTotal}} ms</td></tr>
                     <tr><td>P95</td><td class="metric-cell">{{printf "%.2f" .P95Total}} ms</td></tr>
                     <tr><td>P99</td><td class="metric-cell">{{printf "%.2f" .P99Total}} ms</td></tr>

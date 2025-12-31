@@ -27,12 +27,13 @@ func NewSingleTester(client *HTTPClient, interval time.Duration) *SingleTester {
 // RunTest executes N requests using a small worker pool to speed up collection
 func (st *SingleTester) RunTest(ctx context.Context, testName, targetURL string, count int) (*TestResult, error) {
 	result := &TestResult{
-		TestName:   testName,
-		ProxyName:  st.client.proxyName,
-		TargetURL:  targetURL,
-		TotalCount: count,
-		Metrics:    make([]LatencyMetrics, count),
-		StartTime:  time.Now(),
+		TestName:    testName,
+		ProxyName:   st.client.proxyName,
+		ProxyServer: st.client.proxyAddr,
+		TargetURL:   targetURL,
+		TotalCount:  count,
+		Metrics:     make([]LatencyMetrics, count),
+		StartTime:   time.Now(),
 	}
 
 	fmt.Printf("开始单次请求测试: %s\n", testName)
@@ -129,12 +130,13 @@ func NewConcurrentTester(client *HTTPClient, concurrency int) *ConcurrentTester 
 // RunTest executes concurrent requests and collects metrics
 func (ct *ConcurrentTester) RunTest(ctx context.Context, testName, targetURL string, count int) (*TestResult, error) {
 	result := &TestResult{
-		TestName:   testName,
-		ProxyName:  ct.client.proxyName,
-		TargetURL:  targetURL,
-		TotalCount: count,
-		Metrics:    make([]LatencyMetrics, count),
-		StartTime:  time.Now(),
+		TestName:    testName,
+		ProxyName:   ct.client.proxyName,
+		ProxyServer: ct.client.proxyAddr,
+		TargetURL:   targetURL,
+		TotalCount:  count,
+		Metrics:     make([]LatencyMetrics, count),
+		StartTime:   time.Now(),
 	}
 
 	fmt.Printf("开始并发测试: %s\n", testName)

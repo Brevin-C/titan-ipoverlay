@@ -28,6 +28,7 @@ type LatencyMetrics struct {
 type TestResult struct {
 	TestName     string           // Name of the test
 	ProxyName    string           // Name of the proxy used
+	ProxyServer  string           // SOCKS5 server address (e.g., "192.168.1.1:1080")
 	TargetURL    string           // Target URL tested
 	TotalCount   int              // Total number of requests
 	SuccessCount int              // Number of successful requests
